@@ -1,0 +1,15 @@
+#!/bin/sh
+
+if [ -n "$IPKG_INSTROOT$APK_ROOT" ] && [ "${IPKG_INSTROOT:-$APK_ROOT}" != "/" ]; then
+	exit 0
+fi
+
+/etc/init.d/linker enable >/dev/null 2>&1 || true
+/etc/init.d/linker start >/dev/null 2>&1 || true
+
+rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*.json 2>/dev/null || true
+rm -rf /tmp/luci-modulecache 2>/dev/null || true
+/etc/init.d/rpcd reload >/dev/null 2>&1 || true
+
+echo "linker installed successfully."
+exit 0

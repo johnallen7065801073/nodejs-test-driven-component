@@ -1,0 +1,451 @@
+﻿using linker.tunnel.connection;
+using linker.libs;
+using linker.libs.extends;
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using linker.tunnel.wanport;
+using System.Security.Cryptography.X509Certificates;
+using linker.libs.timer;
+using System.Buffers;
+
+namespace linker.tunnel.transport
+{
+    /// <summary>
+    ///  UDP 打洞
+    ///  
+    ///  大致原理（正向打洞）
+    ///  A 通知 B，我要连你
+    ///  B 收到通知，开始监听收取消息，并且给A随便发送个消息，这时候A肯定收不到
+    ///  A 监听收取消息，并且给 B 发送的试探消息，如果B能收到消息，就会回复一条消息
+    ///  A 能收到回复，就说明通了，这隧道能用
+    /// 
+    /// 反向打洞几乎同理，逻辑变通一下即可
+    /// </summary>
+    public sealed class TransportUdp : ITunnelTransport
+    {
+        public string Name => "Udp";
+
+        public string Label => "UDP、非常纯";
+
+        public TunnelProtocolType ProtocolType => TunnelProtocolType.Udp;
+        public TunnelWanPortProtocolType AllowWanPortProtocolType => TunnelWanPortProtocolType.Udp;
+        public TunnelType TunnelType => TunnelType.P2P;
+        public bool Reverse => true;
+
+        public bool DisableReverse => false;
+
+        public bool SSL => true;
+
+        public bool DisableSSL => false;
+
+        public byte Order => 5;
+
+        public bool EnableAddr => true;
+
+
+        public Action<ITunnelConnection, TunnelTransportInfo> OnConnected { get; set; } = (state, info) => { };
+
+
+        private readonly byte[] authBytes = Encoding.UTF8.GetBytes($"GET /snltty/tcp/index.html HTTP/1.1\r\nHost: www.snltty.com\r\nConnection: keep-alive\r\nTransfer-Encoding: chunked\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nCookie: {Helper.GlobalString}.udp.ttl1\r\n\r\n");
+        private readonly byte[] endBytes = Encoding.UTF8.GetBytes($"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\nContent-Type: text/html\r\nCookie: {Helper.GlobalString}.udp.end1\r\n\r\nOK");
+
+        private readonly ITunnelMessengerAdapter tunnelMessengerAdapter;
+        public TransportUdp(ITunnelMessengerAdapter tunnelMessengerAdapter)
+        {
+            this.tunnelMessengerAdapter = tunnelMessengerAdapter;
+        }
+        private X509Certificate certificate;
+        public void SetSSL(X509Certificate certificate)
+        {
+            this.certificate = certificate;
+        }
+
+        /// <summary>
+        /// 开始连接对方
+        /// </summary>
+        /// <param name="tunnelTransportInfo"></param>
+        /// <returns></returns>
+        public async Task<ITunnelConnection> ConnectAsync(TunnelTransportInfo tunnelTransportInfo)
+        {
+            if (tunnelTransportInfo.Direction == TunnelDirection.Forward)
+            {
+                //正向连接
+                if (await tunnelMessengerAdapter.SendConnectBegin(tunnelTransportInfo).ConfigureAwait(false) == false)
+                {
+                    return null;
+                }
+                await Task.Delay(1000).ConfigureAwait(false);
+                ITunnelConnection connection = await ConnectForward(tunnelTransportInfo).ConfigureAwait(false);
+                if (connection != null)
+                {
+                    await tunnelMessengerAdapter.SendConnectSuccess(tunnelTransportInfo).ConfigureAwait(false);
+                    return connection;
+                }
+            }
+            else if (tunnelTransportInfo.Direction == TunnelDirection.Reverse)
+            {
+                //反向连接
+                TunnelTransportInfo tunnelTransportInfo1 = tunnelTransportInfo.ToJsonFormat().DeJson<TunnelTransportInfo>();
+                await BindAndTTL(tunnelTransportInfo1).ConfigureAwait(false);
+                _ = BindListen(tunnelTransportInfo1.Local.Local, tunnelTransportInfo1);
+                if (await tunnelMessengerAdapter.SendConnectBegin(tunnelTransportInfo1).ConfigureAwait(false) == false)
+                {
+                    return null;
+                }
+                ITunnelConnection connection = await WaitReverse(tunnelTransportInfo1).ConfigureAwait(false);
+                if (connection != null)
+                {
+                    await tunnelMessengerAdapter.SendConnectSuccess(tunnelTransportInfo).ConfigureAwait(false);
+                    return connection;
+                }
+            }
+
+            await tunnelMessengerAdapter.SendConnectFail(tunnelTransportInfo).ConfigureAwait(false);
+            return null;
+        }
+
+        /// <summary>
+        /// 收到连接请求
+        /// </summary>
+        /// <param name="tunnelTransportInfo"></param>
+        /// <returns></returns>
+        public async Task OnBegin(TunnelTransportInfo tunnelTransportInfo)
+        {
+            //他要连我
+            if (tunnelTransportInfo.Direction == TunnelDirection.Forward)
+            {
+                await BindAndTTL(tunnelTransportInfo);
+                _ = BindListen(tunnelTransportInfo.Local.Local, tunnelTransportInfo);
+            }
+            else
+            {
+                //我去连接他
+                ITunnelConnection connection = await ConnectForward(tunnelTransportInfo).ConfigureAwait(false);
+                if (connection != null)
+                {
+                    OnConnected(connection, tunnelTransportInfo);
+                    await tunnelMessengerAdapter.SendConnectSuccess(tunnelTransportInfo).ConfigureAwait(false);
+                }
+                else
+                {
+                    await tunnelMessengerAdapter.SendConnectFail(tunnelTransportInfo).ConfigureAwait(false);
+                }
+            }
+        }
+
+
+        /// <summary>
+        /// 连接对方
+        /// </summary>
+        /// <param name="tunnelTransportInfo"></param>
+        /// <returns></returns>
+        private async Task<ITunnelConnection> ConnectForward(TunnelTransportInfo tunnelTransportInfo)
+        {
+
+            if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+            {
+                LoggerHelper.Instance.Warning($"{Name} connect to {tunnelTransportInfo.Remote.MachineId}->{tunnelTransportInfo.Remote.MachineName} {string.Join("\r\n", tunnelTransportInfo.RemoteEndPoints.FirstOrDefault())}");
+            }
+
+            TaskCompletionSource<IPEndPoint> taskCompletionSource = new TaskCompletionSource<IPEndPoint>(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<IPEndPoint> taskCompletionSourceV6 = new TaskCompletionSource<IPEndPoint>(TaskCreationOptions.RunContinuationsAsynchronously);
+            //监听连接
+            Socket remoteUdp = BindListen(tunnelTransportInfo.Local.Local, [taskCompletionSource, taskCompletionSourceV6], tunnelTransportInfo.RemoteEndPoints.Select(c => c.Address).ToList());
+            IPEndPoint remoteEP = null;
+
+            try
+            {
+                foreach (IPEndPoint ep in tunnelTransportInfo.RemoteEndPoints.Where(c => c.AddressFamily == AddressFamily.InterNetwork))
+                {
+                    remoteUdp.SendTo(authBytes, ep);
+                }
+                remoteEP = await taskCompletionSource.WithTimeout(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                foreach (IPEndPoint ep in tunnelTransportInfo.RemoteEndPoints.Where(c => c.AddressFamily == AddressFamily.InterNetworkV6))
+                {
+                    remoteUdp.SendTo(authBytes, ep);
+                }
+            }
+
+            try
+            {
+                //然后等待对方回复，如果能收到回复，就说明是通了
+                remoteEP = await taskCompletionSourceV6.WithTimeout(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+
+                return new TunnelConnectionUdp
+                {
+                    UdpClient = remoteUdp,
+                    IPEndPoint = remoteEP.MapToIPv4(),
+                    TransactionId = tunnelTransportInfo.TransactionId,
+                    Configure = tunnelTransportInfo.Configure,
+                    RemoteMachineId = tunnelTransportInfo.Remote.MachineId,
+                    RemoteMachineName = tunnelTransportInfo.Remote.MachineName,
+                    TransportName = Name,
+                    Direction = tunnelTransportInfo.Direction,
+                    ProtocolType = ProtocolType,
+                    Type = TunnelType,
+                    Mode = TunnelMode.Client,
+                    Label = string.Empty,
+                    Receive = true,
+                    SSL = tunnelTransportInfo.SSL,
+                    Crypto = CryptoFactory.CreateSymmetricGcm(tunnelTransportInfo.Remote.MachineId)
+                };
+            }
+            catch (Exception ex)
+            {
+                taskCompletionSource.TrySetResult(null);
+                if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+                {
+                    LoggerHelper.Instance.Error(ex);
+                }
+
+            }
+            remoteUdp?.SafeClose();
+            return null;
+        }
+
+        /// <summary>
+        /// 开启一个监听，然后等待对方发来消息
+        /// </summary>
+        /// <param name="local"></param>
+        /// <param name="tcs"></param>
+        /// <returns></returns>
+        private Socket BindListen(IPEndPoint local, TaskCompletionSource<IPEndPoint>[] tcss, List<IPAddress> ips)
+        {
+            local = new IPEndPoint(IPAddress.IPv6Any, local.Port);
+            Socket socket = new Socket(local.AddressFamily, SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp);
+            socket.IPv6Only(local.AddressFamily, false);
+            socket.WindowsUdpBug();
+            socket.ReuseBind(local);
+
+            TimerHelper.Async(async () =>
+            {
+                using IMemoryOwner<byte> buffer = MemoryPool<byte>.Shared.Rent(1024);
+                IPEndPoint ep = new IPEndPoint(IPAddress.IPv6Any, 0);
+                SocketReceiveFromResult result = await socket.ReceiveFromAsync(buffer.Memory, ep).ConfigureAwait(false);
+
+                var memory = buffer.Memory.Slice(0, result.ReceivedBytes);
+                if (result.ReceivedBytes == authBytes.Length && memory.Span.SequenceEqual(authBytes))
+                {
+                    await socket.SendToAsync(endBytes, result.RemoteEndPoint).ConfigureAwait(false);
+                    for (int i = 0; i < tcss.Length; i++)
+                    {
+                        tcss[i].TrySetResult(result.RemoteEndPoint as IPEndPoint);
+                    }
+                }
+            });
+            return socket;
+        }
+
+        /// <summary>
+        /// 开启一个监听，等待对方发来消息，如果收到消息，就给对方回复消息，对方就知道通了
+        /// </summary>
+        /// <param name="local"></param>
+        /// <param name="state"></param>
+        /// <returns></returns>
+        private async Task BindListen(IPEndPoint local, TunnelTransportInfo state)
+        {
+            local = new IPEndPoint(IPAddress.IPv6Any, local.Port);
+            Socket socket = new Socket(local.AddressFamily, SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp);
+            try
+            {
+                socket.IPv6Only(local.AddressFamily, false);
+                socket.ReuseBind(local);
+                socket.WindowsUdpBug();
+                ListenAsyncToken token = new ListenAsyncToken
+                {
+                    LocalUdp = socket,
+                    Tcs = new TaskCompletionSource<AddressFamily>(TaskCreationOptions.RunContinuationsAsynchronously),
+                    State = state
+                };
+                _ = ListenReceiveCallback(token);
+
+                try
+                {
+                    AddressFamily af = await token.Tcs.WithTimeout(TimeSpan.FromMilliseconds(30000)).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    socket.SafeClose();
+                    token.Tcs.TrySetResult(AddressFamily.InterNetwork);
+                }
+                return;
+            }
+            catch (Exception ex)
+            {
+                if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+                {
+                    LoggerHelper.Instance.Error(ex);
+                }
+            }
+            socket.SafeClose();
+        }
+        private async Task ListenReceiveCallback(ListenAsyncToken token)
+        {
+            using IMemoryOwner<byte> buffer = MemoryPool<byte>.Shared.Rent(8 * 1024);
+            try
+            {
+                IPEndPoint ep = new IPEndPoint(IPAddress.IPv6Any, 0);
+                while (token.Tcs.Task.IsCompleted == false)
+                {
+                    SocketReceiveFromResult result = await token.LocalUdp.ReceiveFromAsync(buffer.Memory, ep).ConfigureAwait(false);
+                    if (result.ReceivedBytes == 0)
+                    {
+                        token.Tcs.TrySetResult(result.RemoteEndPoint.AddressFamily);
+                        break;
+                    }
+
+                    var memory = buffer.Memory.Slice(0, result.ReceivedBytes);
+                    if (result.ReceivedBytes == endBytes.Length && memory.Span.SequenceEqual(endBytes))
+                    {
+                        if (token.Tcs != null && token.Tcs.Task.IsCompleted == false)
+                        {
+                            token.Tcs.TrySetResult(result.RemoteEndPoint.AddressFamily);
+                            await OnUdpConnected(token.State, token.LocalUdp, result.RemoteEndPoint as IPEndPoint).ConfigureAwait(false);
+                        }
+                        break;
+                    }
+                    else
+                    {
+                        await token.LocalUdp.SendToAsync(memory, result.RemoteEndPoint).ConfigureAwait(false);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+                {
+                    LoggerHelper.Instance.Error(ex);
+                }
+            }
+            finally
+            {
+            }
+        }
+
+        /// <summary>
+        /// 随便发送一些消息
+        /// </summary>
+        /// <param name="tunnelTransportInfo"></param>
+        private async Task BindAndTTL(TunnelTransportInfo tunnelTransportInfo)
+        {
+            IPEndPoint local = new IPEndPoint(IPAddress.IPv6Any, tunnelTransportInfo.Local.Local.Port);
+            Socket socket = new Socket(local.AddressFamily, SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp);
+            socket.IPv6Only(local.AddressFamily, false);
+            socket.WindowsUdpBug();
+            socket.ReuseBind(local);
+            socket.Ttl = (short)(tunnelTransportInfo.Local.RouteLevel);
+
+            foreach (var ip in tunnelTransportInfo.RemoteEndPoints)
+            {
+                await socket.SendToAsync(Encoding.UTF8.GetBytes(Guid.NewGuid().ToString().Md5()), SocketFlags.None, ip).ConfigureAwait(false);
+            }
+            socket.SafeClose();
+        }
+
+        private ConcurrentDictionary<string, TaskCompletionSource<ITunnelConnection>> reverseDic = new ConcurrentDictionary<string, TaskCompletionSource<ITunnelConnection>>();
+        /// <summary>
+        /// 反向连接的时候，等待对方来连
+        /// </summary>
+        /// <param name="tunnelTransportInfo"></param>
+        /// <returns></returns>
+        private async Task<ITunnelConnection> WaitReverse(TunnelTransportInfo tunnelTransportInfo)
+        {
+            TaskCompletionSource<ITunnelConnection> tcs = new TaskCompletionSource<ITunnelConnection>(TaskCreationOptions.RunContinuationsAsynchronously);
+            reverseDic.TryAdd(tunnelTransportInfo.Remote.MachineId, tcs);
+
+            try
+            {
+                ITunnelConnection connection = await tcs.WithTimeout(TimeSpan.FromMilliseconds(5000)).ConfigureAwait(false);
+                return connection;
+            }
+            catch (Exception)
+            {
+                tcs.TrySetResult(null);
+            }
+            finally
+            {
+                reverseDic.TryRemove(tunnelTransportInfo.Remote.MachineId, out _);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 收到打洞失败消息
+        /// </summary>
+        /// <param name="tunnelTransportInfo"></param>
+        public void OnFail(TunnelTransportInfo tunnelTransportInfo)
+        {
+            if (reverseDic.TryRemove(tunnelTransportInfo.Remote.MachineId, out TaskCompletionSource<ITunnelConnection> tcs))
+            {
+                tcs.TrySetResult(null);
+            }
+        }
+        /// <summary>
+        /// 收到打洞成功消息
+        /// </summary>
+        /// <param name="tunnelTransportInfo"></param>
+        public void OnSuccess(TunnelTransportInfo tunnelTransportInfo)
+        {
+            if (reverseDic.TryRemove(tunnelTransportInfo.Remote.MachineId, out TaskCompletionSource<ITunnelConnection> tcs))
+            {
+                tcs.TrySetResult(null);
+            }
+        }
+
+        private Task OnUdpConnected(object _state, Socket localUdp, IPEndPoint remoteEP)
+        {
+            TunnelTransportInfo state = _state as TunnelTransportInfo;
+            if (state.TransportName == Name)
+            {
+                try
+                {
+                    TunnelConnectionUdp result = new TunnelConnectionUdp
+                    {
+                        UdpClient = localUdp,
+                        RemoteMachineId = state.Remote.MachineId,
+                        RemoteMachineName = state.Remote.MachineName,
+                        Direction = state.Direction,
+                        ProtocolType = TunnelProtocolType.Udp,
+                        Type = TunnelType,
+                        Mode = TunnelMode.Server,
+                        TransactionId = state.TransactionId,
+                        Configure = state.Configure,
+                        TransportName = state.TransportName,
+                        IPEndPoint = remoteEP.MapToIPv4(),
+                        Label = string.Empty,
+                        Receive = true,
+                        SSL = state.SSL,
+                        Crypto = CryptoFactory.CreateSymmetricGcm(state.Local.MachineId)
+                    };
+                    if (reverseDic.TryRemove(state.Remote.MachineId, out TaskCompletionSource<ITunnelConnection> tcs))
+                    {
+                        tcs.TrySetResult(result);
+                        return Task.CompletedTask;
+                    }
+                    OnConnected(result, state);
+                }
+                catch (Exception ex)
+                {
+                    if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+                    {
+                        LoggerHelper.Instance.Error(ex);
+                    }
+                }
+            }
+            return Task.CompletedTask;
+        }
+
+        sealed class ListenAsyncToken
+        {
+            public Socket LocalUdp { get; set; }
+            public TaskCompletionSource<AddressFamily> Tcs { get; set; }
+            public object State { get; set; }
+        }
+
+    }
+}

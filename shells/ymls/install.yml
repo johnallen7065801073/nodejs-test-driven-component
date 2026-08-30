@@ -1,0 +1,82 @@
+name: InstallPack
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: setup dotnet
+        uses: actions/setup-dotnet@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_TOKEN }}
+        with:
+          dotnet-version: 8.0.x
+      
+      - name: setup install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils tar gzip curl jq
+
+      - name: setup apk mkpkg
+        run: |
+          cat >/tmp/openwrt-apk <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:$PWD" -w "$PWD" alpine:edge apk "$@"
+          EOF
+          chmod +x /tmp/openwrt-apk
+          /tmp/openwrt-apk --version
+          /tmp/openwrt-apk mkpkg --help >/tmp/apk-mkpkg-help.txt 2>&1 || true
+          grep -q 'apk mkpkg creates' /tmp/apk-mkpkg-help.txt
+
+      - name: sed shell
+        run: |
+          for f in shells/publish-ipk.sh shells/publish-fpk.sh publish-ipk.sh; do
+            if [ -f "$f" ]; then
+              sed -i 's/\r$//' "$f"
+            fi
+          done
+
+      - name: chmod shell
+        run: |
+          for f in shells/publish-ipk.sh shells/publish-fpk.sh publish-ipk.sh; do
+            if [ -f "$f" ]; then
+              chmod +x "$f"
+            fi
+          done
+
+      - name: publish projects
+        run: |
+          set -e
+          if [ -x ./publish-ipk.sh ]; then
+            APK_CMD=/tmp/openwrt-apk ./publish-ipk.sh
+          elif [ -x ./shells/publish-ipk.sh ]; then
+            APK_CMD=/tmp/openwrt-apk ./shells/publish-ipk.sh
+          else
+            echo "publish-ipk.sh not found" >&2
+            exit 1
+          fi
+
+          if [ -x ./shells/publish-fpk.sh ]; then
+            ./shells/publish-fpk.sh
+          fi
+
+      - name: get latest release
+        id: get_release
+        run: |
+          response=$(curl -s \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.ACTIONS_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/latest")
+          upload_url=$(echo "$response" | jq -r '.upload_url')
+          echo "upload_url=$upload_url" >> $GITHUB_OUTPUT
+    

@@ -1,0 +1,50 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFrameworks>net8.0</TargetFrameworks>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>disable</Nullable>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<PublishAot>false</PublishAot>
+		<JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+		<!--<EnablePreviewFeatures>True</EnablePreviewFeatures>-->
+		<Title>linker tunnel</Title>
+		<Authors>snltty</Authors>
+		<Company>snltty</Company>
+		<Description>linker tunnel</Description>
+		<Copyright>snltty</Copyright>
+		<PackageProjectUrl>https://github.com/snltty/linker</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/snltty/linker</RepositoryUrl>
+		<PackageReleaseNotes>linker tunnel</PackageReleaseNotes>
+		<Version>2.0.17</Version>
+		<AssemblyVersion>2.0.17</AssemblyVersion>
+		<FileVersion>2.0.17</FileVersion>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+		<DebugType>full</DebugType>
+		<DebugSymbols>true</DebugSymbols>
+	</PropertyGroup>
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+		<DebugType>full</DebugType>
+		<DebugSymbols>true</DebugSymbols>
+		<Optimize>True</Optimize>
+	</PropertyGroup>
+	<PropertyGroup Condition="'$(Configuration)|$(TargetFramework)|$(Platform)'=='Debug|net8.0|AnyCPU'">
+		<DebugType>embedded</DebugType>
+	</PropertyGroup>
+	<PropertyGroup Condition="'$(Configuration)|$(TargetFramework)|$(Platform)'=='Release|net8.0|AnyCPU'">
+		<DebugType>embedded</DebugType>
+	</PropertyGroup>
+	<ItemGroup>
+	  <PackageReference Include="System.IO.Pipelines" Version="8.0.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\linker.fec\linker.fec.csproj" />
+		<ProjectReference Include="..\linker.kcp\linker.kcp.csproj" />
+		<ProjectReference Include="..\linker.libs\linker.libs.csproj" />
+		<ProjectReference Include="..\linker.upnp\linker.upnp.csproj" />
+	</ItemGroup>
+
+</Project>

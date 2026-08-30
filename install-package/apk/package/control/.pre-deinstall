@@ -1,0 +1,12 @@
+#!/bin/sh
+
+if [ -z "$IPKG_INSTROOT$APK_ROOT" ] || [ "${IPKG_INSTROOT:-$APK_ROOT}" = "/" ]; then
+	echo "removing linker..."
+	/etc/init.d/linker stop >/dev/null 2>&1 || true
+	/etc/init.d/linker disable >/dev/null 2>&1 || true
+	rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*.json 2>/dev/null || true
+	rm -rf /tmp/luci-modulecache 2>/dev/null || true
+	/etc/init.d/rpcd reload >/dev/null 2>&1 || true
+fi
+
+exit 0

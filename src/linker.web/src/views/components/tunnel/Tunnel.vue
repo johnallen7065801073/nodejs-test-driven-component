@@ -1,0 +1,184 @@
+<template>
+    <AccessBoolean value="TunnelChangeSelf,TunnelChangeOther">
+        <template #default="{values}">
+            <el-table-column prop="tunnel" :label="$t('network')" width="104">
+                <template #default="scope">
+                    <template v-if="scope.row && scope.row.hook_tunnel">
+                        <div class="skeleton-animation" :style="`animation-delay:${scope.row.animationDelay}ms`">
+                            <div class="nowrap">
+                                <template v-if="scope.row.hook_tunnel.Net.CountryCode">
+                                    <img class="system" :title="`${scope.row.hook_tunnel.Net.CountryCode}、${scope.row.hook_tunnel.Net.City}`" :src="`https://unpkg.com/flag-icons@7.2.3/flags/4x3/${scope.row.hook_tunnel.Net.CountryCode.toLowerCase()}.svg`" />
+                                </template>
+                                <template v-else>
+                                    <img title="?" class="system" src="/system.svg" />
+                                </template>
+                                <template v-if="scope.row.hook_tunnel.Net.Isp">
+                                    <img class="system" :title="`${scope.row.hook_tunnel.Net.Isp}`" :src="netImg(scope.row.hook_tunnel.Net)" />
+                                </template>
+                                <template v-else>
+                                    <img class="system" title="?" src="/system.svg" />
+                                </template>
+                                <template v-if="scope.row.hook_tunnel.Net.Nat">
+                                    <span class="nat" :class="{
+                                        green:scope.row.hook_tunnel.Net.nat_number>=50,
+                                        yellow:scope.row.hook_tunnel.Net.nat_number>0 && scope.row.hook_tunnel.Net.nat_number<50,
+                                        red:scope.row.hook_tunnel.Net.nat_number==0
+                                    }" :title="scope.row.hook_tunnel.Net.nat_text">{{ scope.row.hook_tunnel.Net.nat_number }}%</span>
+                                </template>
+                                <template v-else>
+                                    <img title="?" class="system" src="/system.svg" />
+                                </template>
+                            </div> 
+                            <div class="nowrap flex">
+                                <template v-if="scope.row.hook_counter">
+                                    <a href="javascript:;" class="a-line" :title="`${$t('network.upnp.remark')}
+1、${$t('network.upnp.ip')} : ${scope.row.hook_counter['upnp-w']}  ${scope.row.hook_counter['upnp-w']>0?'✅':'❌'}
+2、${$t('network.upnp.device')} : ${scope.row.hook_counter['upnp-d']} ${scope.row.hook_counter['upnp-d']>0?'✅':'❌'}
+3、${$t('network.upnp.local')} : ${scope.row.hook_counter['upnp-l']} ${scope.row.hook_counter['upnp-l']>0?'✅':'❌'}
+4、${$t('network.upnp.remote')} : ${scope.row.hook_counter['upnp-r']} ${scope.row.hook_counter['upnp-r']>0?'✅':'❌'}`"
+                                    @click="handleUpnp(scope.row.hook_tunnel,scope.row,values)"
+                                    :class="scope.row.hook_counter['upnp-w'] > 0 && scope.row.hook_counter['upnp-d'] > 0
+                                        ? 'green' : (scope.row.hook_counter['upnp-w']> 0 || scope.row.hook_counter['upnp-d'] > 0
+                                        ? 'yellow' : '')">
+                                        <img class="system" 
+                                        :src="scope.row.hook_counter['upnp-w'] > 0 && scope.row.hook_counter['upnp-d'] > 0
+                                            ? '/upnp-green.svg' : (scope.row.hook_counter['upnp-w']> 0 || scope.row.hook_counter['upnp-d'] > 0
+                                            ? '/upnp-yellow.svg' : '/upnp.svg')"/>
+                                        <span>{{ scope.row.hook_counter['upnp-l'] }}-{{ scope.row.hook_counter['upnp-r'] }}</span>
+                                    </a>
+                                </template>
+                                
+                                <span class="flex-1"></span>
+                                <a href="javascript:;" class="a-line" 
+                                    :class="{yellow:scope.row.hook_tunnel.NeedReboot,green:scope.row.hook_tunnel.Mesh.Enabled}"
+                                    @click="handleTunnel(scope.row.hook_tunnel,scope.row,values)">
+                                    {{scope.row.hook_tunnel.RouteLevel}}+{{scope.row.hook_tunnel.RouteLevelPlus}}
+                                </a>
+                            </div>
+                        </div>
+                    </template>
+                    <template v-else-if="scope.row &&!scope.row.hook_tunnel_load">
+                        <div class="skeleton-animation">
+                            <el-skeleton animated >
+                                <template #template>
+                                    <div class="nowrap">
+                                        <el-skeleton-item variant="text" class="w-20- mgr-1-" />
+                                        <el-skeleton-item variant="text" class="w-20- mgr-1-" />
+                                        <el-skeleton-item variant="text" class="w-20-" />
+                                    </div>
+                                    <div class="nowrap">
+                                        <el-skeleton-item variant="text" class="w-50-" />
+                                        <el-skeleton-item variant="text" class="w-50-" />
+                                    </div>
+                                </template>
+                            </el-skeleton>
+                        </div>
+                    </template>
+                    <div class="device-remark"></div>
+                </template>
+            </el-table-column>
+        </template>
+    </AccessBoolean>
+</template>
+<script>
+import { useTunnel } from './tunnel';
+import { injectGlobalData } from '@/provide';
+import { computed } from 'vue';
+import { ElMessage } from 'element-plus';
+import {useI18n} from 'vue-i18n';
+
+export default {
+    emits: ['edit','refresh'],
+    setup() {
+
+        const t = useI18n();
+        const globalData = injectGlobalData();
+        const machineId = computed(() => globalData.value.config.Client.Id);
+
+        const tunnel = useTunnel();
+
+        const imgMap = {
+            'chinanet':'chinanet.svg',
+            'china169':'chinanet.svg',
+            'china telecom':'chinanet.svg',
+            'china unicom':'chinaunicom.svg',
+            'china mobile':'chinamobile.svg',
+            'huawei':'huawei.svg',
+            'amazon':'amazon.svg',
+            'aliyun':'aliyun.svg',
+            'alibaba':'aliyun.svg',
+            'jdcom':'jdcom.svg',
+            'jdcom':'jdcom.svg',
+            'cloudflare':'cloudflare.svg'
+        }
+        const regex = new RegExp(Object.keys(imgMap).map(item => `\\b${item}\\b`).join("|"));
+        const netImg = (item)=>{
+            const isp = item.Isp.toLowerCase();
+            if(isp){
+                const macth = isp.match(regex);
+                if(macth){
+                    return `./${imgMap[macth[0]]}`;
+                }
+            }
+            return `./system.svg`;
+        }
+
+        const handleTunnel = (_tunnel,row,access) => {
+            if(machineId.value === _tunnel.MachineId){
+                if(!access.TunnelChangeSelf){
+                    ElMessage.success(t('common.access'));
+                    return;
+                }
+            }else{
+                if(!access.TunnelChangeOther){
+                    ElMessage.success(t('common.access'));
+                    return;
+                }
+            }
+            _tunnel.device = row;
+            tunnel.value.current = _tunnel;
+            tunnel.value.showEdit = true;
+        }
+        const handleUpnp = (_tunnel,row,access)=>{
+            if(machineId.value === _tunnel.MachineId){
+                if(!access.TunnelChangeSelf){
+                    ElMessage.success(t('common.access'));
+                    return;
+                }
+            }else{
+                if(!access.TunnelChangeOther){
+                    ElMessage.success(t('common.access'));
+                    return;
+                }
+            }
+            _tunnel.device = row;
+            tunnel.value.current = _tunnel;
+            tunnel.value.showUpnp = true;
+        }
+
+        return {
+            handleTunnel,handleUpnp,netImg
+        }
+    }
+}
+</script>
+<style lang="stylus" scoped>
+
+.el-switch.is-disabled{opacity :1;}
+
+.el-skeleton-item{width: 30%;margin-right:3%}
+.el-skeleton-item-last{width: 30%;}
+.el-skeleton-item2{width: 70%}
+
+
+img.system,span.nat{
+    height:1.4rem;
+    margin-right:.2rem;
+    border: 1px solid var(--table-border-color);
+    line-height:1.4rem;
+    vertical-align:middle;
+}
+
+span.nat{display:inline-block;padding:0 .2rem;margin-right:0;font-family: cursive;}
+.nowrap{line-height:1.8rem;}
+</style>

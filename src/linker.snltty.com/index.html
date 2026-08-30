@@ -1,0 +1,1202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Linker - 天涯若比邻</title>
+    <meta name="keywords" content="linker, 开源, P2P, 异地组网, 异地组网工具">
+    <meta name="description" content="Linker 是一个面向异地设备访问、P2P 直连和点对网组网的开源工具。">
+    <link rel="icon" href="img/logo.png">
+    <link href="css/font-awesome.min.css" rel="stylesheet">
+    <script src="js/echarts.min.js"></script>
+    <style>
+        :root {
+            --primary: #404844;
+            --secondary: #66716d;
+            --muted: #8a9691;
+            --line: rgba(122, 133, 128, 0.2);
+            --light: #f4f6f3;
+            --light-dark: #e2e8df;
+            --card: rgba(255, 255, 255, 0.94);
+            --green: #3da935;
+            --green-soft: rgba(61, 169, 53, 0.12);
+            --blue: #4f8fb8;
+            --warning: #d49a2f;
+            --danger: #d85f56;
+        }
+
+        * {
+            box-sizing: border-box;
+            letter-spacing: 0;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+        }
+
+        body {
+            margin: 0;
+            min-width: 320px;
+            overflow: hidden;
+            color: var(--primary);
+            background: var(--light);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+            text-rendering: optimizeLegibility;
+        }
+
+        a {
+            color: inherit;
+            text-decoration: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .map {
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+        }
+
+        .card {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--card);
+            box-shadow: 0 14px 38px rgba(57, 72, 64, 0.1);
+            backdrop-filter: blur(16px);
+        }
+
+        .toolbar {
+            position: absolute;
+            top: 16px;
+            left: 50%;
+            z-index: 24;
+            transform: translateX(-50%);
+            display: grid;
+            gap: 8px;
+            width: max-content;
+            max-width: calc(100% - 36px);
+            padding: 9px;
+        }
+
+        .chips,
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 7px;
+        }
+
+        .chip,
+        .action,
+        .download-trigger {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            min-height: 34px;
+            padding: 0 12px;
+            border: 1px solid transparent;
+            border-radius: 999px;
+            font-size: 13px;
+            line-height: 1;
+            white-space: nowrap;
+        }
+
+        .chip {
+            color: var(--secondary);
+            background: rgba(244, 246, 243, 0.78);
+        }
+
+        .chip i {
+            color: var(--green);
+        }
+
+        .action,
+        .download-trigger {
+            color: var(--primary);
+            background: rgba(244, 246, 243, 0.72);
+            cursor: pointer;
+        }
+
+        .action:hover,
+        .download:hover .download-trigger,
+        .download-links a:hover {
+            color: var(--green);
+            background: var(--green-soft);
+        }
+
+        .action.primary {
+            color: var(--green);
+            font-weight: 700;
+        }
+
+        .download {
+            position: relative;
+        }
+
+        .download::after {
+            content: "";
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 100%;
+            z-index: 1;
+            height: 8px;
+        }
+
+        .download-links {
+            position: absolute;
+            top: calc(100% + 6px);
+            right: 0;
+            z-index: 2;
+            display: none;
+            min-width: 190px;
+            padding: 8px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--card);
+            box-shadow: 0 16px 36px rgba(57, 72, 64, 0.12);
+        }
+
+        .download:hover .download-links {
+            display: grid;
+            gap: 4px;
+        }
+
+        .download-links a,
+        .download-links span,
+        .download-category-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 32px;
+            padding: 0 10px;
+            border-radius: 6px;
+            color: var(--secondary);
+            font-size: 13px;
+        }
+
+        .download-links span {
+            color: var(--muted);
+        }
+
+        .download-category {
+            position: relative;
+        }
+
+        .download-category::after {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 100%;
+            width: 8px;
+            height: 100%;
+        }
+
+        .download-category-title {
+            justify-content: space-between;
+            cursor: default;
+        }
+
+        .download-category-title b {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            font-weight: 400;
+        }
+
+        .download-category:hover .download-category-title {
+            color: var(--green);
+            background: var(--green-soft);
+        }
+
+        .download-submenu {
+            position: absolute;
+            top: 0;
+            left: calc(100% + 6px);
+            z-index: 3;
+            display: none;
+            min-width: 160px;
+            padding: 8px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--card);
+            box-shadow: 0 16px 36px rgba(57, 72, 64, 0.12);
+        }
+
+        .download-category:hover .download-submenu {
+            display: grid;
+            gap: 4px;
+        }
+
+        .left-panel {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            z-index: 18;
+            display: flex;
+            flex-direction: column;
+            width: 268px;
+            max-height: calc(100vh - 32px);
+            overflow: hidden;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 15px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .brand img {
+            width: 42px;
+            height: 42px;
+            object-fit: contain;
+        }
+
+        .brand h1 {
+            margin: 0;
+            font-size: 20px;
+            line-height: 1;
+        }
+
+        .brand p {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            margin: 7px 0 0;
+            color: var(--secondary);
+            font-size: 12px;
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--green);
+            box-shadow: 0 0 0 4px rgba(61, 169, 53, 0.13);
+        }
+
+        .nodes-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 13px 0;
+        }
+
+        .nodes-head h2 {
+            margin: 0;
+            font-size: 14px;
+        }
+
+        .nodes-head span {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .nodes-list {
+            display: grid;
+            gap: 8px;
+            padding: 12px;
+            overflow-y: auto;
+        }
+
+        .nodes-list::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .nodes-list::-webkit-scrollbar-thumb {
+            border-radius: 999px;
+            background: rgba(122, 133, 128, 0.45);
+        }
+
+        .nodes-group {
+            display: grid;
+            gap: 8px;
+        }
+
+        .node {
+            display: block;
+            padding: 10px;
+            border: 1px solid rgba(122, 133, 128, 0.12);
+            border-radius: 8px;
+            background: rgba(244, 246, 243, 0.7);
+        }
+
+        .node-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        .node-dot {
+            flex: 0 0 auto;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--green);
+        }
+
+        .node-name {
+            overflow: hidden;
+            font-size: 13px;
+            font-weight: 700;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .node-meta,
+        .bar-line {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .version {
+            max-width: 88px;
+            overflow: hidden;
+            padding: 3px 6px;
+            border-radius: 999px;
+            color: var(--green);
+            background: var(--green-soft);
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .bar {
+            height: 4px;
+            margin-top: 5px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: #dce4d9;
+        }
+
+        .bar span {
+            display: block;
+            height: 100%;
+            width: 0;
+            border-radius: inherit;
+            background: var(--green);
+        }
+
+        .bar span.warn {
+            background: var(--warning);
+        }
+
+        .bar span.danger {
+            background: var(--danger);
+        }
+
+        .system-card {
+            padding: 10px;
+            border: 1px solid rgba(122, 133, 128, 0.12);
+            border-radius: 8px;
+            background: rgba(244, 246, 243, 0.7);
+        }
+
+        .system-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .system-title h3 {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            margin: 0;
+            font-size: 13px;
+        }
+
+        .system-title span {
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .system-chart {
+            width: 100%;
+            height: 168px;
+        }
+
+        .stats {
+            position: absolute;
+            right: 16px;
+            bottom: 50px;
+            z-index: 20;
+            width: 248px;
+            overflow: hidden;
+        }
+
+        .stat {
+            padding: 13px 15px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .stat:last-child {
+            border-bottom: 0;
+        }
+
+        .stat p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .stat strong {
+            display: block;
+            margin-top: 6px;
+            font-size: 26px;
+            line-height: 1;
+        }
+
+        .green {
+            color: var(--green);
+        }
+
+        .time {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            z-index: 18;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 38px;
+            padding: 0 12px;
+            color: var(--secondary);
+            font-size: 13px;
+        }
+
+        .footer {
+            position: absolute;
+            left: 50%;
+            bottom: 10px;
+            z-index: 22;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: max-content;
+            max-width: calc(100% - 32px);
+            padding: 8px 12px;
+            color: var(--secondary);
+            font-size: 13px;
+            white-space: nowrap;
+        }
+
+        .footer a {
+            text-decoration: underline;
+            text-underline-offset: 2px;
+        }
+
+        @media (max-width: 1220px) {
+            .chips {
+                display: none;
+            }
+        }
+
+        @media (max-width: 760px) {
+            .toolbar {
+                top: 12px;
+                left: 12px;
+                right: 12px;
+                transform: none;
+                width: auto;
+                max-width: none;
+                padding: 8px;
+            }
+
+            .actions {
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                justify-content: center;
+                gap: 6px;
+            }
+
+            .action,
+            .download-trigger {
+                min-width: 0;
+                padding: 0 8px;
+                font-size: 12px;
+            }
+
+            .download-links {
+                right: 0;
+                min-width: 178px;
+            }
+
+            .download-submenu {
+                left: auto;
+                right: 100%;
+                min-width: 145px;
+            }
+
+            .left-panel {
+                top: 78px;
+                left: 12px;
+                right: 12px;
+                bottom: 118px;
+                z-index: 19;
+                width: auto;
+                max-height: none;
+            }
+
+            .brand {
+                padding: 10px 12px;
+            }
+
+            .brand img {
+                width: 34px;
+                height: 34px;
+            }
+
+            .nodes-head {
+                padding: 10px 12px 0;
+            }
+
+            .nodes-list {
+                padding: 10px;
+            }
+
+            .node {
+                padding: 9px;
+            }
+
+            .system-chart {
+                height: 150px;
+            }
+
+            .stats {
+                left: 12px;
+                right: 12px;
+                bottom: 10px;
+                z-index: 20;
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                width: auto;
+            }
+
+            .stat {
+                padding: 10px;
+                border-bottom: 0;
+                border-right: 1px solid var(--line);
+            }
+
+            .stat:last-child {
+                border-right: 0;
+            }
+
+            .stat strong {
+                font-size: 20px;
+            }
+
+            .time,
+            .footer {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="deviceMap" class="map"></div>
+
+    <section class="toolbar card" aria-label="Linker 功能与操作">
+        <div class="chips">
+            <span class="chip"><i class="fa fa-desktop"></i>WEB UI</span>
+            <span class="chip"><i class="fa fa-lock"></i>安全加密</span>
+            <span class="chip"><i class="fa fa-random"></i>P2P 直连</span>
+            <span class="chip"><i class="fa fa-forward"></i>FEC</span>
+            <span class="chip"><i class="fa fa-tachometer"></i>KCP</span>
+            <span class="chip"><i class="fa fa-shield"></i>防火墙</span>
+            <span class="chip"><i class="fa fa-exchange"></i>网段映射</span>
+        </div>
+        <div class="actions">
+            <a class="action primary" href="https://linker-doc.snltty.com" target="_blank" rel="noopener">
+                <i class="fa fa-play"></i>马上开始
+            </a>
+            <a class="action" href="https://afdian.com/a/snltty" target="_blank" rel="noopener">
+                <i class="fa fa-heart"></i>为爱发电
+            </a>
+            <div class="download">
+                <span class="download-trigger"><i class="fa fa-download"></i>下载 <i class="fa fa-angle-down"></i></span>
+                <div class="download-links" id="download-links">
+                    <span><i class="fa fa-spinner fa-spin"></i>加载版本信息...</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <aside class="left-panel card" aria-label="在线中继节点">
+        <div class="brand">
+            <img src="img/logo.png" alt="Linker logo">
+            <div>
+                <h1>Linker</h1>
+                <p><span class="pulse-dot"></span><span id="data-status">系统在线</span></p>
+            </div>
+        </div>
+        <div class="nodes-head">
+            <h2>在线中继节点</h2>
+            <span id="node-count">加载中</span>
+        </div>
+        <div class="nodes-list">
+            <div class="nodes-group" id="nodes-container"></div>
+            <div class="system-card">
+                <div class="system-title">
+                    <h3><i class="fa fa-pie-chart"></i>系统分布</h3>
+                    <span id="system-count">加载中</span>
+                </div>
+                <div class="system-chart" id="system-chart"></div>
+            </div>
+        </div>
+    </aside>
+
+    <div class="time card">
+        <i class="fa fa-clock-o"></i>
+        <span id="current-time">--:--:--</span>
+    </div>
+
+    <aside class="stats card" aria-label="在线统计">
+        <div class="stat">
+            <p>主服务器 在线 / 7天上线</p>
+            <strong><span class="green" id="current-online">--</span> / <span id="current-online-7d">--</span></strong>
+        </div>
+        <div class="stat">
+            <p>总服务器数 / 在线 / 7天上线</p>
+            <strong><span id="server-count">--</span> / <span class="green" id="all-online">--</span> / <span id="all-online-7d">--</span></strong>
+        </div>
+    </aside>
+
+    <footer class="footer card">
+        <span>© linker snltty <span id="year"></span></span>
+        <span>、</span>
+        <a href="https://jq.qq.com/?_wv=1027&k=ucoIVfz4" target="_blank" rel="noopener">加入 QQ 群：1121552990</a>
+        <span>、</span>
+        <a href="https://blog.snltty.com" target="_blank" rel="noopener">博客</a>
+        <span>、</span>
+        <a href="https://mi-d.cn" target="_blank" rel="noopener">米多贝克</a>
+    </footer>
+
+    <script>
+        const endpoints = {
+            version: "https://static.snltty.com/downloads/linker/version.txt",
+            systems: "https://api.linker.snltty.com/flow/systems.json",
+            cities: "https://api.linker.snltty.com/flow/citys.json",
+            online: "https://api.linker.snltty.com/flow/online.json",
+            nodes: "https://api.linker.snltty.com/relay/nodes.json"
+        };
+
+        const fallback = {
+            online: {
+                CurrentServer: { Online: 128, Online7day: 462 },
+                AllServer: { Server: 19, Online: 784, Online7day: 2318 }
+            },
+            cities: [
+                { City: "上海", Lon: 121.47, Lat: 31.23, Count: 120 },
+                { City: "北京", Lon: 116.4, Lat: 39.9, Count: 88 },
+                { City: "深圳", Lon: 114.05, Lat: 22.55, Count: 74 },
+                { City: "成都", Lon: 104.06, Lat: 30.67, Count: 52 },
+                { City: "杭州", Lon: 120.16, Lat: 30.25, Count: 61 },
+                { City: "新加坡", Lon: 103.82, Lat: 1.35, Count: 43 },
+                { City: "东京", Lon: 139.69, Lat: 35.69, Count: 37 },
+                { City: "洛杉矶", Lon: -118.24, Lat: 34.05, Count: 29 }
+            ],
+            systems: {
+                "win-x64": 126,
+                "linux-x64": 96,
+                "linux-arm64": 58,
+                "openwrt-arm": 44,
+                "osx-arm64": 21,
+                "fnos-docker": 18
+            },
+            nodes: [
+                { Name: "上海中继", Url: "https://linker-doc.snltty.com", Version: "v0.9.x", AllowProtocol: 3, BandwidthCurrentMbps: 156, BandwidthMaxMbps: 500, ConnectionCurrentNum: 186, ConnectionMaxNum: 600 },
+                { Name: "北京中继", Url: "https://linker-doc.snltty.com", Version: "v0.9.x", AllowProtocol: 3, BandwidthCurrentMbps: 92, BandwidthMaxMbps: 300, ConnectionCurrentNum: 94, ConnectionMaxNum: 420 },
+                { Name: "广州中继", Url: "https://linker-doc.snltty.com", Version: "v0.9.x", AllowProtocol: 3, BandwidthCurrentMbps: 68, BandwidthMaxMbps: 200, ConnectionCurrentNum: 76, ConnectionMaxNum: 260 }
+            ]
+        };
+
+        let mapChart = null;
+        let systemChart = null;
+        let worldReady = false;
+
+        document.addEventListener("DOMContentLoaded", () => {
+            document.getElementById("year").textContent = new Date().getFullYear();
+            updateTime();
+            setInterval(updateTime, 1000);
+            initMap();
+            loadVersion();
+            refreshData();
+            setInterval(refreshData, 8000);
+            window.addEventListener("resize", () => {
+                if (mapChart) mapChart.resize();
+                if (systemChart) systemChart.resize();
+            });
+        });
+
+        async function initMap() {
+            const target = document.getElementById("deviceMap");
+            if (!window.echarts || !target) return;
+
+            mapChart = echarts.init(target);
+            const worldJson = await fetchJson("world.json");
+            if (!worldJson) return;
+
+            echarts.registerMap("world", worldJson);
+            worldReady = true;
+            mapChart.setOption({
+                backgroundColor: "transparent",
+                tooltip: {
+                    trigger: "item",
+                    formatter: params => {
+                        if (params.seriesType === "lines") return `${params.data.fromName} -> ${params.data.toName}`;
+                        return `${params.name}: ${params.value && params.value[2] ? params.value[2] : 0} 台设备`;
+                    },
+                    backgroundColor: "rgba(255,255,255,0.96)",
+                    borderColor: "rgba(122,133,128,0.24)",
+                    textStyle: { color: "#404844" }
+                },
+                geo: {
+                    map: "world",
+                    roam: true,
+                    zoom: 2.35,
+                    center: [105, 35],
+                    label: {
+                        show: true,
+                        color: "#78847f",
+                        fontSize: 10
+                    },
+                    itemStyle: {
+                        areaColor: {
+                            type: "radial",
+                            x: 0.5,
+                            y: 0.5,
+                            r: 0.8,
+                            colorStops: [
+                                { offset: 0, color: "rgba(246,248,245,0.95)" },
+                                { offset: 1, color: "rgba(219,227,216,0.78)" }
+                            ]
+                        },
+                        borderColor: "rgba(186,197,190,0.58)",
+                        borderWidth: 1
+                    },
+                    emphasis: {
+                        itemStyle: { areaColor: "rgba(226,236,222,0.86)" },
+                        label: { color: "#52625b" }
+                    }
+                },
+                series: [
+                    {
+                        name: "链路",
+                        type: "lines",
+                        coordinateSystem: "geo",
+                        silent: true,
+                        animation: false,
+                        zlevel: 1,
+                        lineStyle: {
+                            color: "rgba(79,143,184,0.22)",
+                            width: 1,
+                            opacity: 0.8,
+                            curveness: 0.18
+                        },
+                        data: []
+                    },
+                    {
+                        name: "设备分布",
+                        type: "scatter",
+                        coordinateSystem: "geo",
+                        animation: false,
+                        zlevel: 2,
+                        symbolSize: value => Math.min(20, Math.max(7, Math.sqrt(value[2] || 1) * 1.8)),
+                        itemStyle: {
+                            color: "#3da935",
+                            shadowBlur: 14,
+                            shadowColor: "rgba(61,169,53,0.35)"
+                        },
+                        data: []
+                    },
+                    {
+                        name: "核心区域",
+                        type: "scatter",
+                        coordinateSystem: "geo",
+                        animation: false,
+                        zlevel: 3,
+                        symbol: "pin",
+                        symbolSize: 34,
+                        itemStyle: {
+                            color: "#4f8fb8",
+                            shadowBlur: 12,
+                            shadowColor: "rgba(79,143,184,0.32)"
+                        },
+                        data: [{ name: "Linker", value: [105, 35, 1] }]
+                    }
+                ]
+            });
+            updateMap(fallback.cities);
+        }
+
+        async function loadVersion() {
+            try {
+                const text = await fetchText(endpoints.version);
+                const version = text.trim().split(/\r?\n/)[0];
+                if (!version) throw new Error("empty version");
+                renderDownloadLinks(version);
+            } catch (error) {
+                document.getElementById("download-links").innerHTML = '<span><i class="fa fa-exclamation-circle"></i>无法加载版本信息</span>';
+            }
+        }
+
+        function renderDownloadLinks(version) {
+            const baseUrl = `https://static.snltty.com/downloads/linker/${version}/`;
+            const groups = [
+                {
+                    icon: "fa-windows",
+                    label: "Windows",
+                    files: [
+                        ["x64", "linker-win-x64.zip"],
+                        ["ARM64", "linker-win-arm64.zip"],
+                        ["x86", "linker-win-x86.zip"]
+                    ]
+                },
+                {
+                    icon: "fa-linux",
+                    label: "Linux",
+                    files: [
+                        ["x64", "linker-linux-x64.zip"],
+                        ["ARM64", "linker-linux-arm64.zip"],
+                        ["ARM", "linker-linux-arm.zip"],
+                        ["x64 Musl", "linker-linux-musl-x64.zip"],
+                        ["ARM64 Musl", "linker-linux-musl-arm64.zip"],
+                        ["ARM Musl", "linker-linux-musl-arm.zip"]
+                    ]
+                },
+                {
+                    icon: "fa-apple",
+                    label: "macOS",
+                    files: [
+                        ["x64 Intel", "linker-osx-x64.zip"],
+                        ["ARM64 Apple", "linker-osx-arm64.zip"]
+                    ]
+                },
+                {
+                    icon: "fa-linux",
+                    label: "FNOS",
+                    files: [
+                        ["Docker", "linker-fnos-docker.fpk"],
+                        ["Binary x64", "linker-fnos-bin-x64.fpk"],
+                        ["Binary ARM64", "linker-fnos-bin-arm64.fpk"]
+                    ]
+                },
+                {
+                    icon: "fa-code-fork",
+                    label: "OpenWRT ipk",
+                    files: [
+                        ["x64", "linker-openwrt-x64.ipk"],
+                        ["ARM64", "linker-openwrt-arm64.ipk"],
+                        ["ARM", "linker-openwrt-arm.ipk"]
+                    ]
+                },
+                {
+                    icon: "fa-code-fork",
+                    label: "OpenWRT apk",
+                    files: [
+                        ["x64", "linker-openwrt-x64.apk"],
+                        ["ARM64", "linker-openwrt-arm64.apk"],
+                        ["ARM", "linker-openwrt-arm.apk"]
+                    ]
+                },
+                {
+                    icon: "fa-android",
+                    label: "Android",
+                    files: [
+                        ["APK", "linker.apk"]
+                    ]
+                },
+                {
+                    icon: "fa-file-archive-o",
+                    label: "Any",
+                    files: [
+                        ["Any", "linker-any.zip"]
+                    ]
+                }
+            ];
+
+            document.getElementById("download-links").innerHTML = groups.map(group => (
+                `<div class="download-category">
+                    <div class="download-category-title">
+                        <b><i class="fa ${group.icon}"></i>${group.label}</b>
+                        <i class="fa fa-angle-right"></i>
+                    </div>
+                    <div class="download-submenu">
+                        ${group.files.map(([label, file]) => (
+                            `<a href="${baseUrl + file}" target="_blank" rel="noopener">${label}</a>`
+                        )).join("")}
+                    </div>
+                </div>`
+            )).join("");
+        }
+
+        async function refreshData() {
+            const [systems, cities, online, nodes] = await Promise.all([
+                fetchJson(endpoints.systems),
+                fetchJson(endpoints.cities),
+                fetchJson(endpoints.online),
+                fetchJson(endpoints.nodes)
+            ]);
+
+            fallback.systems = systems || fallback.systems;
+            fallback.cities = cities || fallback.cities;
+            fallback.online = online || fallback.online;
+            fallback.nodes = nodes || fallback.nodes;
+
+            setText("data-status", systems || cities || online || nodes ? "系统在线" : "预览数据");
+            updateMap(fallback.cities);
+            updateOnlineStats(fallback.online);
+            renderNodes(fallback.nodes);
+            updateSystemChart(fallback.systems );
+        }
+
+        async function fetchJson(url) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) return null;
+                return await response.json();
+            } catch (error) {
+                return null;
+            }
+        }
+
+        async function fetchText(url) {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.text();
+        }
+
+        function updateMap(cities) {
+            if (!mapChart || !worldReady) return;
+
+            const points = (Array.isArray(cities) ? cities : [])
+                .filter(city => Number.isFinite(Number(city.Lon)) && Number.isFinite(Number(city.Lat)))
+                .map(city => ({
+                    name: city.City || "未知城市",
+                    value: [Number(city.Lon), Number(city.Lat), Number(city.Count) || 0]
+                }));
+
+            const routes = [...points]
+                .sort((a, b) => b.value[2] - a.value[2])
+                .slice(0, 10)
+                .map(point => ({
+                    fromName: "Linker",
+                    toName: point.name,
+                    coords: [[105, 35], [point.value[0], point.value[1]]]
+                }));
+
+            mapChart.setOption({
+                series: [
+                    { data: routes },
+                    { data: points },
+                    { data: [{ name: "Linker", value: [105, 35, 1] }] }
+                ]
+            });
+        }
+
+        function updateOnlineStats(data) {
+            const currentServer = data && data.CurrentServer ? data.CurrentServer : {};
+            const allServer = data && data.AllServer ? data.AllServer : {};
+            setText("current-online", formatNumber(currentServer.Online || 0));
+            setText("current-online-7d", formatNumber(currentServer.Online7day || 0));
+            setText("server-count", formatNumber(allServer.Server || 0));
+            setText("all-online", formatNumber(allServer.Online || 0));
+            setText("all-online-7d", formatNumber(allServer.Online7day || 0));
+        }
+
+        function renderNodes(nodes) {
+            const list = Array.isArray(nodes) ? nodes : [];
+            const container = document.getElementById("nodes-container");
+            container.innerHTML = "";
+            setText("node-count", `${list.length} 个`);
+
+            if (!list.length) {
+                container.appendChild(createEmptyNode());
+                return;
+            }
+
+            list.forEach(node => container.appendChild(createNode(node)));
+        }
+
+        function createEmptyNode() {
+            const empty = document.createElement("div");
+            empty.className = "node";
+            empty.textContent = "暂无节点数据";
+            return empty;
+        }
+
+        function updateSystemChart(data) {
+            const chartDom = document.getElementById("system-chart");
+            if (!window.echarts || !chartDom) return;
+
+            const grouped = {};
+            Object.keys(data || {}).forEach(key => {
+                const name = key.split("-").slice(0, 2).join("-") || key;
+                grouped[name] = (grouped[name] || 0) + Number(data[key] || 0);
+            });
+
+            const chartData = Object.entries(grouped)
+                .map(([name, value]) => ({ name, value }))
+                .sort((a, b) => b.value - a.value);
+
+            const total = chartData.reduce((sum, item) => sum + item.value, 0);
+            setText("system-count", `${formatNumber(total)} 台`);
+
+            if (!systemChart) {
+                systemChart = echarts.init(chartDom);
+                systemChart.setOption({
+                    animation: false,
+                    color: ["#3da935", "#4f8fb8", "#d49a2f", "#d85f56", "#7f9a8c", "#a8b6b0"],
+                    tooltip: {
+                        trigger: "item",
+                        backgroundColor: "rgba(255,255,255,0.96)",
+                        borderColor: "rgba(122,133,128,0.24)",
+                        textStyle: { color: "#404844" }
+                    },
+                    series: [
+                        {
+                            name: "系统",
+                            type: "pie",
+                            animation: false,
+                            radius: ["44%", "68%"],
+                            center: ["50%", "48%"],
+                            avoidLabelOverlap: true,
+                            itemStyle: {
+                                borderColor: "rgba(255,255,255,0.9)",
+                                borderWidth: 2,
+                                borderRadius: 5
+                            },
+                            label: {
+                                color: "#66716d",
+                                fontSize: 10,
+                                formatter: "{b}"
+                            },
+                            labelLine: {
+                                length: 8,
+                                length2: 5
+                            },
+                            data: chartData
+                        }
+                    ]
+                });
+                return;
+            }
+
+            systemChart.setOption({
+                series: [
+                    {
+                        data: chartData
+                    }
+                ]
+            });
+        }
+
+        function createNode(node) {
+            const bandwidthUsage = percent(node.BandwidthCurrentMbps, node.BandwidthMaxMbps);
+            const connectionUsage = percent(node.ConnectionCurrentNum, node.ConnectionMaxNum);
+
+            const item = document.createElement("a");
+            item.className = "node";
+            item.href = safeUrl(node.Url);
+            item.target = "_blank";
+            item.rel = "noopener";
+            item.innerHTML = `
+                <div class="node-title">
+                    <span class="node-dot"></span>
+                    <span class="node-name">${escapeHtml(node.Name || "未知节点")}</span>
+                </div>
+                <div class="node-meta">
+                    <span>协议: ${protocolName(node.AllowProtocol)}</span>
+                    <span class="version">${escapeHtml(node.Version || "未知版本")}</span>
+                </div>
+                <div class="bar-line">
+                    <span>带宽</span>
+                    <span>${node.BandwidthCurrentMbps || 0}/${node.BandwidthMaxMbps || 0} Mbps</span>
+                </div>
+                <div class="bar"><span class="${usageClass(bandwidthUsage)}" style="width:${bandwidthUsage}%"></span></div>
+                <div class="bar-line">
+                    <span>连接</span>
+                    <span>${node.ConnectionCurrentNum || 0}/${node.ConnectionMaxNum || 0}</span>
+                </div>
+                <div class="bar"><span class="${usageClass(connectionUsage)}" style="width:${connectionUsage}%"></span></div>
+            `;
+            return item;
+        }
+
+        function protocolName(value) {
+            if (value === 1) return "TCP";
+            if (value === 2) return "UDP";
+            return "TCP+UDP";
+        }
+
+        function percent(current, max) {
+            const currentValue = Number(current || 0);
+            const maxValue = Number(max || 0);
+            if (maxValue <= 0) return 0;
+            return Math.max(0, Math.min(100, Math.round((currentValue / maxValue) * 100)));
+        }
+
+        function usageClass(value) {
+            if (value >= 90) return "danger";
+            if (value >= 70) return "warn";
+            return "";
+        }
+
+        function safeUrl(value) {
+            try {
+                const url = new URL(value || "", window.location.href);
+                if (url.protocol === "http:" || url.protocol === "https:") return url.href;
+            } catch (error) {
+                return "#";
+            }
+            return "#";
+        }
+
+        function escapeHtml(value) {
+            return String(value).replace(/[&<>"']/g, char => ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;"
+            })[char]);
+        }
+
+        function formatNumber(value) {
+            return Number(value || 0).toLocaleString("zh-CN");
+        }
+
+        function setText(id, value) {
+            const element = document.getElementById(id);
+            if (element) element.textContent = value;
+        }
+
+        function updateTime() {
+            const now = new Date();
+            setText("current-time", [
+                String(now.getHours()).padStart(2, "0"),
+                String(now.getMinutes()).padStart(2, "0"),
+                String(now.getSeconds()).padStart(2, "0")
+            ].join(":"));
+        }
+    </script>
+</body>
+</html>
+<!-- 92f66e -->

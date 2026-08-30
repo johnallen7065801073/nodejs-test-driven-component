@@ -1,0 +1,219 @@
+<template>
+    <div class="home-list-wrap h-100 flex flex-column flex-nowrap" >
+        <Sort @sort="handleSortChange"></Sort>
+        <el-table :data="devices.page.List" border size="small" class="flex-1 w-100">
+            <Device  @refresh="handlePageRefresh" @search="handleSearchChange"></Device>
+            <Tunnel  @refresh="deviceRefreshHook('tunnel')"></Tunnel>
+            <Tuntap @refresh="handlePageRefresh"></Tuntap>
+            <Socks5  @refresh="deviceRefreshHook('socks5')"></Socks5> 
+            <Forward ></Forward> 
+            <Oper  @refresh="handlePageRefresh"></Oper>
+        </el-table>
+        <div class="page" :class="{'t-c':state.center}">
+            <div class="page-wrap">
+                <el-pagination small background :total="devices.page.Count"
+                    :pager-count="state.paperCount"
+                    :layout="state.paperLayout"
+                    :page-size="devices.page.Request.Size" :current-page="devices.page.Request.Page"
+                    @current-change="handlePageChange" @size-change="handlePageSizeChange" 
+                    :page-sizes="[10, 20, 50, 100,255]" />
+            </div>
+        </div>
+        <DeviceEdit v-if="devices.showDeviceEdit" v-model="devices.showDeviceEdit"  @change="handlePageChange" :data="devices.deviceInfo"></DeviceEdit>
+        <AccessEdit v-if="devices.showAccessEdit" v-model="devices.showAccessEdit"  @change="handlePageChange" :data="devices.deviceInfo"></AccessEdit>
+        <TunnelEdit v-if="tunnel.showEdit" v-model="tunnel.showEdit"  @change="deviceRefreshHook('tunnel')"></TunnelEdit>
+        <TunnelUpnp v-if="tunnel.showUpnp" v-model="tunnel.showUpnp"></TunnelUpnp>
+        
+        <ConnectionsEdit v-if="connections.showEdit" v-model="connections.showEdit" ></ConnectionsEdit>
+        <TuntapEdit v-if="tuntap.showEdit" v-model="tuntap.showEdit"  @change="deviceRefreshHook('tuntap')"></TuntapEdit>
+        <TuntapLease v-if="tuntap.showLease" v-model="tuntap.showLease"  @change="deviceRefreshHook('tuntap')"></TuntapLease>
+        <Socks5Edit v-if="socks5.showEdit" v-model="socks5.showEdit"  @change="deviceRefreshHook('socks5')"></Socks5Edit>
+        <ForwardEdit v-if="forward.showEdit" v-model="forward.showEdit" ></ForwardEdit>
+        <ReverseEdit v-if="reverse.showEdit" v-model="reverse.showEdit" ></ReverseEdit>
+        <UpdaterConfirm v-if="updater.show" v-model="updater.show" ></UpdaterConfirm>
+        
+        <OperFirewall v-if="firewall.show" v-model="firewall.show" ></OperFirewall>
+        <OperWakeup v-if="wakeup.show" v-model="wakeup.show" ></OperWakeup>
+        <OperTransport v-if="transport.show" v-model="transport.show" ></OperTransport>
+        <OperAction v-if="action.show" v-model="action.show" ></OperAction>
+        <Stopwatch v-if="flow.showStopwatch" v-model="flow.showStopwatch" ></Stopwatch>
+        <OperFlow v-if="flow.show" v-model="flow.show" ></OperFlow>
+        <OperWlist v-if="wlist.show" v-model="wlist.show" @change="deviceRefreshHook('wlist')" ></OperWlist>
+    </div>
+</template>
+<script>
+import { injectGlobalData } from '@/provide.js'
+import { reactive, onMounted,  onUnmounted, computed } from 'vue'
+
+import Sort from './Sort.vue'
+
+import Device from '../../../components/device/Device.vue'
+import DeviceEdit from '../../../components/device/DeviceEdit.vue'
+import { provideDevices } from '../../../components/device/devices'
+
+import AccessEdit from '../../../components/accesss/AccessEdit.vue'
+import { provideAccess } from '../../../components/accesss/access'
+
+import Socks5 from '../../../components/socks5/Socks5.vue'
+import Socks5Edit from '../../../components/socks5/Socks5Edit.vue'
+import { provideSocks5 } from '../../../components/socks5/socks5'
+
+import Tunnel from '../../../components/tunnel/Tunnel.vue'
+import TunnelEdit from '../../../components/tunnel/TunnelEdit.vue'
+import TunnelUpnp from '../../../components/tunnel/TunnelUpnp.vue'
+import { provideTunnel } from '../../../components/tunnel/tunnel'
+
+import { provideUpdater } from '../../../components/updater/updater'
+import UpdaterConfirm from '../../../components/updater/UpdaterConfirm.vue'
+
+
+import Tuntap from '../../../components/tuntap/Tuntap.vue'
+import TuntapEdit from '../../../components/tuntap/TuntapEdit.vue'
+import TuntapLease from '../../../components/tuntap/TuntapLease.vue'
+import { provideTuntap } from '../../../components/tuntap/tuntap'
+
+import ConnectionsEdit from '../../../components/tunnel/ConnectionsEdit.vue'
+import { provideConnections } from '../../../components/tunnel/connections'
+
+
+import Forward from '../../../components/forward/Forward.vue'
+import ForwardEdit from '../../../components/forward/ForwardEdit.vue'
+import { provideForward } from '../../../components/forward/forward'
+import ReverseEdit from '../../../components/forward/ReverseEdit.vue'
+import { provideReverse } from '../../../components/forward/reverse'
+
+import { provideFlow } from '../../../components/flow/flow'
+import Stopwatch from '../../../components/flow/stopwatch/Index.vue'
+import OperFlow from '../../../components/flow/OperDialog.vue'
+
+import Oper from '../../../components/oper/Oper.vue'
+import { provideOper } from '../../../components/oper/oper'
+import OperFirewall from '../../../components/firewall/OperDialog.vue'
+import OperWakeup from '../../../components/wakeup/OperDialog.vue'
+import OperTransport from '../../../components/transport/OperDialog.vue'
+import OperAction from '../../../components/action/OperDialog.vue'
+
+import { provideDecenter } from '@/views/components/decenter/decenter'
+import { provideFirewall } from '@/views/components/firewall/firewall'
+import { provideWakeup } from '@/views/components/wakeup/wakeup'
+import { provideTransport } from '@/views/components/transport/transport'
+import { provideAction } from '@/views/components/action/action'
+import { provideWlist } from '@/views/components/wlist/wlist'
+import OperWlist from '../../../components/wlist/OperDialog.vue'
+
+
+export default {
+    components: {Sort,
+        Device,DeviceEdit,
+        AccessEdit,
+        Tunnel,TunnelEdit,
+        ConnectionsEdit,
+        Tuntap,TuntapEdit,TunnelUpnp,TuntapLease,
+        Socks5, Socks5Edit,
+        Forward,ForwardEdit,
+        ReverseEdit ,UpdaterConfirm,
+        Stopwatch,
+        Oper,OperFirewall,OperWakeup ,OperTransport,OperAction,OperFlow,OperWlist
+    },
+    setup(props) {
+
+        const globalData = injectGlobalData();
+        const state = reactive({
+            center: computed(()=>globalData.value.isPc),
+            paperCount: computed(()=>globalData.value.isPc?7:3),
+            paperLayout: computed(()=>globalData.value.isPc?'total,sizes,prev,pager, next':'prev, pager, next'),
+        });
+
+        const {devices,deviceAddHook,deviceRefreshHook, deviceStartProcess, handlePageChange,
+             handlePageSizeChange,deviceClearTimeout,handleSort,handleSearch} = provideDevices();
+        const {forward} = provideForward();
+        const {reverse} = provideReverse();
+        const {flow} = provideFlow();
+        const {oper} = provideOper();
+        const {firewall} = provideFirewall();
+        const {wakeup} = provideWakeup();
+        const {transport} = provideTransport();
+        const {action}  = provideAction();
+
+        const {accessDataFn,accessProcessFn,accessRefreshFn} = provideAccess();
+        deviceAddHook('access',accessDataFn,accessProcessFn,accessRefreshFn);
+        const {decenter,counterDataFn,counterProcessFn,counterRefreshFn} = provideDecenter();
+        deviceAddHook('counter',counterDataFn,counterProcessFn,counterRefreshFn);
+        const {socks5,socks5DataFn,socks5ProcessFn,socks5RefreshFn,getSocks5Machines,sortSocks5}  = provideSocks5();
+        deviceAddHook('socks5',socks5DataFn,socks5ProcessFn,socks5RefreshFn);
+        const {tunnel,tunnelDataFn,tunnelProcessFn,tunnelRefreshFn,sortTunnel} = provideTunnel();
+        deviceAddHook('tunnel',tunnelDataFn,tunnelProcessFn,tunnelRefreshFn);
+        const {updater, updaterDataFn, updaterProcessFn,updaterRefreshFn,updaterSubscribe, updaterClearTimeout} = provideUpdater();
+        deviceAddHook('updater',updaterDataFn,updaterProcessFn,updaterRefreshFn);
+        const {tuntap,tuntapDataFn,tuntapProcessFn,tuntapRefreshFn,getTuntapMachines,sortTuntapIP}  = provideTuntap();
+        deviceAddHook('tuntap',tuntapDataFn,tuntapProcessFn,tuntapRefreshFn);
+        const {connections,connectionDataFn,connectionProcessFn,connectionRefreshFn } = provideConnections();
+        deviceAddHook('connection',connectionDataFn,connectionProcessFn,connectionRefreshFn);
+        const {wlist,wlistDataFn,wlistProcessFn,wlistRefreshFn} = provideWlist();
+        deviceAddHook('wlist',wlistDataFn,wlistProcessFn,wlistRefreshFn);
+        
+        
+        const handleSortChange = (row)=>{
+            if(!row.order){
+                devices.page.Request.Prop = '';
+            }else{
+                devices.page.Request.Prop = row.prop;
+                devices.page.Request.Asc = row.order == 'ascending';
+            }
+            handleSort();
+        }
+        const handleSearchChange = ()=>{
+            handleSearch();
+        }
+
+        const handlePageRefresh = ()=>{
+            devices.page.Request.Ids = getTuntapMachines(devices.page.Request.Name)
+            .concat(getSocks5Machines(devices.page.Request.Name))
+            .reduce((arr,id)=>{
+                if(arr.indexOf(id) == -1){
+                    arr.push(id);
+                }
+                return arr;
+            },[]);
+            handlePageChange(devices.page.Request.Page);
+        }
+
+        onMounted(() => {
+            window.dispatchEvent(new Event('resize'));
+            deviceStartProcess();
+            updaterSubscribe();
+        });
+        onUnmounted(() => {
+            deviceClearTimeout();
+            updaterClearTimeout();
+        });
+
+        return {
+            state,devices,deviceRefreshHook,handleSortChange, handlePageRefresh, handlePageChange,handlePageSizeChange,handleSearchChange,
+            tuntap,
+            socks5,
+            tunnel,connections,
+            forward,
+            reverse,
+            updater,flow,oper,firewall,wakeup,transport,action,wlist
+        }
+    }
+}
+</script>
+<style lang="stylus">
+.table-sort.el-table
+{
+    th.el-table__cell.is-leaf{border-bottom:0}
+    .el-table__inner-wrapper:before{height:0}
+}
+.home-list-wrap .el-table__body .el-table__cell{padding:8px 0;}
+</style>
+<style lang="stylus" scoped>
+.home-list-wrap{
+
+    .page{padding:1rem 0;border:1px solid var(--table-border-color);border-top:0;}
+    .page-wrap{
+        display:inline-block;
+    }
+}
+</style>

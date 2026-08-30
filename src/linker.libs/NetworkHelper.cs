@@ -1,0 +1,428 @@
+﻿using linker.libs.extends;
+using System;
+using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Numerics;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+
+namespace linker.libs
+{
+
+    public struct IPNetwork
+    {
+        public uint ip;
+        public uint prefix;
+
+        public IPNetwork(IPAddress ip, byte prefixLength)
+        {
+            this.ip = NetworkHelper.ToValue(ip);
+            this.prefix = NetworkHelper.ToPrefixValue(prefixLength);
+        }
+        public IPNetwork(uint ip, uint prefix)
+        {
+            this.ip = ip;
+            this.prefix = prefix;
+        }
+
+        public uint ToValue()
+        {
+            return NetworkHelper.ToNetworkValue(ip, prefix);
+        }
+
+        public bool Equals(IPNetwork other)
+        {
+            return ToValue() == other.ToValue();
+        }
+    }
+
+    public static partial class NetworkHelper
+    {
+        public static ushort ApplyNewPort()
+        {
+            using Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            socket.Bind(new IPEndPoint(IPAddress.Any, 0));
+            ushort port = (ushort)(socket.LocalEndPoint as IPEndPoint).Port;
+
+            socket.SafeClose();
+
+            return port;
+        }
+
+        public static IPAddress GetDomainIp(string domain, AddressFamily addressFamily = AddressFamily.Unspecified)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(domain))
+                {
+                    return null;
+                }
+                if (IPAddress.TryParse(domain, out IPAddress ip))
+                {
+                    return ip;
+                }
+                return Dns.GetHostEntry(domain, addressFamily).AddressList.FirstOrDefault();
+            }
+            catch (Exception)
+            {
+            }
+            return null;
+        }
+        public static async Task<IPAddress> GetDomainIpAsync(string domain, AddressFamily addressFamily = AddressFamily.Unspecified)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(domain))
+                {
+                    return null;
+                }
+                if (IPAddress.TryParse(domain, out IPAddress ip))
+                {
+                    return ip;
+                }
+                return (await Dns.GetHostEntryAsync(domain, addressFamily).ConfigureAwait(false)).AddressList.FirstOrDefault();
+            }
+            catch (Exception)
+            {
+            }
+            return null;
+        }
+        public static IPEndPoint GetEndPoint(string host, int defaultPort, AddressFamily addressFamily = AddressFamily.Unspecified)
+        {
+            try
+            {
+                string[] hostArr = host.Split(':');
+                int port = defaultPort;
+                string domain = hostArr[0];
+                if (hostArr.Length == 2)
+                {
+                    port = int.Parse(hostArr[1]);
+                    domain = string.Join(":", hostArr.Take(hostArr.Length - 1));
+                }
+                IPAddress ip = GetDomainIp(domain, addressFamily);
+                return new IPEndPoint(ip, port);
+            }
+            catch (Exception)
+            {
+            }
+            return null;
+        }
+        public static async Task<IPEndPoint> GetEndPointAsync(string host, int defaultPort, AddressFamily addressFamily = AddressFamily.Unspecified)
+        {
+            try
+            {
+                string[] hostArr = host.Split(':');
+                int port = defaultPort;
+                string domain = hostArr[0];
+                if (hostArr.Length > 1)
+                {
+                    port = int.Parse(hostArr[^1]);
+                    domain = string.Join(":", hostArr.Take(hostArr.Length - 1));
+                }
+                IPAddress ip = await GetDomainIpAsync(domain, addressFamily).ConfigureAwait(false);
+                return new IPEndPoint(ip, port);
+            }
+            catch (Exception)
+            {
+            }
+            return null;
+        }
+
+        public static async Task<(ushort, List<IPAddress>)> GetRouteLevel(string server)
+        {
+            List<IPAddress> result = new List<IPAddress>();
+            if (string.IsNullOrWhiteSpace(server) == false)
+            {
+                server = server.Split(':')[0];
+            }
+
+            if (OperatingSystem.IsWindows())
+            {
+                return await GetRouteLevelWindows(server).ConfigureAwait(false);
+            }
+            else if (OperatingSystem.IsLinux())
+            {
+                return GetRouteLevelLinux(server);
+            }
+            return (3, result);
+        }
+        private static (ushort, List<IPAddress>) GetRouteLevelLinux(string server)
+        {
+            List<IPAddress> result = new List<IPAddress>();
+
+            string str = CommandHelper.Linux(string.Empty, new string[] { $"traceroute {server} -4 -m 5 -w 1" });
+            string[] lines = str.Split(Environment.NewLine);
+
+            Regex regex = MyRegex();
+            for (ushort i = 1; i < lines.Length; i++)
+            {
+                try
+                {
+                    string ip = regex.Match(lines[i]).Groups[1].Value;
+                    if (IPAddress.TryParse(ip, out IPAddress _ip) && _ip.IsPrivateIP())
+                    {
+                        result.Add(_ip);
+                    }
+                    else
+                    {
+                        return (i, result);
+                    }
+                }
+                catch (Exception)
+                {
+                }
+            }
+
+            return (3, result);
+        }
+        private static async Task<(ushort, List<IPAddress>)> GetRouteLevelWindows(string server)
+        {
+            List<IPAddress> result = new List<IPAddress>();
+            try
+            {
+                IPAddress target = (await Dns.GetHostEntryAsync(server).ConfigureAwait(false)).AddressList.FirstOrDefault(c => c.AddressFamily == AddressFamily.InterNetwork);
+
+                for (ushort i = 1; i <= 5; i++)
+                {
+                    using Ping pinger = new();
+                    PingReply reply = pinger.Send(target, 100, Encoding.ASCII.GetBytes(Helper.GlobalString), new PingOptions { Ttl = i, DontFragment = true });
+                    if (reply.Status != IPStatus.Success)
+                    {
+                        continue;
+                    }
+
+                    if (reply.Address.IsPrivateIP())
+                    {
+                        result.Add(reply.Address);
+                    }
+                    else
+                    {
+                        return (i, result);
+                    }
+                }
+            }
+            catch (Exception)
+            {
+            }
+            return (3, result);
+        }
+
+
+        private readonly static byte[] ipv6LocalBytes = [254, 128, 0, 0, 0, 0, 0, 0];
+        private static IPAddress[] GetIP()
+        {
+            if (OperatingSystem.IsAndroid() == false)
+            {
+                try
+                {
+                    IPAddress[] ips = Dns.GetHostEntry(Dns.GetHostName()).AddressList;
+                    if (ips.Length > 0) return ips;
+                }
+                catch (Exception)
+                {
+                }
+            }
+
+            try
+            {
+                return NetworkInterface.GetAllNetworkInterfaces()
+                    .SelectMany(c => c.GetIPProperties().UnicastAddresses)
+                    .Select(c => c.Address)
+                    .ToArray();
+            }
+            catch (Exception)
+            {
+            }
+
+            return Array.Empty<IPAddress>();
+        }
+        public static IPAddress[] GetIPV6()
+        {
+            return GetIP()
+                 .Where(c => c.AddressFamily == AddressFamily.InterNetworkV6)
+                 .Where(c => c.GetAddressBytes().AsSpan(0, 8).SequenceEqual(ipv6LocalBytes) == false)
+                 .Where(c => c.Equals(IPAddress.IPv6Loopback) == false)
+                 .Where(c =>
+                 {
+                     Span<byte> bytes = c.GetAddressBytes();
+                     return (
+                     bytes[0] == 0xFD
+                     || (bytes[0] == 0xFE && (bytes[1] == 0x80 || bytes[1] == 0xC0))
+                     ) == false;
+                 })
+                 .Distinct().ToArray();
+        }
+        public static IPAddress[] GetIPV4()
+        {
+            return GetIP()
+                .Where(c => c.AddressFamily == AddressFamily.InterNetwork)
+                .Where(c => c.IsIPv4MappedToIPv6 == false)
+                .Where(c => c.Equals(IPAddress.Loopback) == false)
+                .Distinct().ToArray();
+        }
+
+        /// <summary>
+        /// 找到合适的子网CIDR
+        /// </summary>
+        /// <param name="mainPrefixLength"></param>
+        /// <param name="start"></param>
+        /// <param name="end"></param>
+        /// <returns></returns>
+        public static (IPAddress network, byte prefixLength) FindSubNetworkCidr(byte mainPrefixLength, IPAddress start, IPAddress end)
+        {
+            //主网络掩码
+            uint mainPrefixValue = ToPrefixValue(mainPrefixLength);
+
+            //按范围找到最接近的子网段
+            uint startIpValue = ToValue(start);
+            uint endIpValue = ToValue(end);
+
+            //开始
+            uint originStart = startIpValue & ~mainPrefixValue;
+            //结束
+            uint originEnd = endIpValue & ~mainPrefixValue;
+
+            //掩码
+            byte prefixLength = (byte)(32 - (int)Math.Log2(FindNearestPowerOfTwo(originEnd - originStart + 1)));
+
+            //最靠近的网络号
+            uint startValue = FindNearestMultiple(originStart, prefixLength);
+
+            //网络号 192.168.0.64
+            uint networkValue = (startIpValue & mainPrefixValue) | startValue;
+
+            return (ToIP(networkValue), prefixLength);
+        }
+        public static uint FindNearestMultiple(uint originStart, byte prefixLength)
+        {
+            uint ratio = (uint)(1 << (32 - prefixLength));
+
+            uint lower = (originStart / ratio) * ratio;
+            uint upper = lower + ratio;
+
+            return originStart - lower <= upper - originStart ? lower : upper;
+        }
+        private static uint FindNearestPowerOfTwo(uint number)
+        {
+            if (number <= 1)
+            {
+                return 1;
+            }
+            // 31 - 左边1之前的全0个数 = 最后一个1的位置
+            // 66 01100000 -> 6  1<<6=64 和 1<<7=128
+            int highestBit = 31 - BitOperations.LeadingZeroCount(number);
+
+            uint lower = 1U << highestBit;
+            uint upper = 1U << (highestBit + 1);
+
+            return (number - lower <= upper - number) ? lower : upper;
+        }
+
+
+        public static byte ToPrefixLength(uint ip)
+        {
+            return (byte)BitOperations.PopCount(ip);
+        }
+        public static uint ToPrefixValue(byte prefixLength)
+        {
+            return prefixLength == 0 ? 0 : 0xffffffff << (32 - prefixLength);
+        }
+
+        public static uint ToValue(IPAddress ip)
+        {
+            Span<byte> bytes = stackalloc byte[4];
+            ip.TryWriteBytes(bytes, out _);
+            return BinaryPrimitives.ReadUInt32BigEndian(bytes);
+        }
+        public static uint ToValue(ReadOnlySpan<byte> span)
+        {
+            return BinaryPrimitives.ReadUInt32BigEndian(span);
+        }
+        public static IPAddress ToIP(uint value)
+        {
+            return new IPAddress(BinaryPrimitives.ReverseEndianness(value));
+        }
+        public static IPAddress ToIP(ReadOnlySpan<byte> spsn)
+        {
+            return new IPAddress(spsn);
+        }
+
+        public static IPAddress ToNetworkIP(IPAddress ip, uint prefixIP)
+        {
+            return ToNetworkIP(ToValue(ip), prefixIP);
+        }
+        public static IPAddress ToNetworkIP(IPAddress ip, byte prefixLength)
+        {
+            return ToNetworkIP(ToValue(ip), ToPrefixValue(prefixLength));
+        }
+        public static IPAddress ToNetworkIP(uint ip, uint prefixIP)
+        {
+            return new IPAddress(BinaryPrimitives.ReverseEndianness(ToNetworkValue(ip, prefixIP)));
+        }
+
+        public static uint ToNetworkValue(IPAddress ip, byte prefixLength)
+        {
+            return ToNetworkValue(ToValue(ip), ToPrefixValue(prefixLength));
+        }
+        public static uint ToNetworkValue(uint ip, uint prefixIP)
+        {
+            return ip & prefixIP;
+        }
+        public static uint ToNetworkValue(uint ip, byte prefixLength)
+        {
+            return ToNetworkValue(ip, ToPrefixValue(prefixLength));
+        }
+
+        public static uint ToBroadcastValue(IPAddress ip, byte prefixLength)
+        {
+            return ToBroadcastValue(ToValue(ip), ToPrefixValue(prefixLength));
+        }
+        public static uint ToBroadcastValue(uint ip, uint prefixIP)
+        {
+            return ip | ~prefixIP;
+        }
+
+        public static IPAddress ToGatewayIP(IPAddress ip, byte prefixLength)
+        {
+            Span<byte> bytes = stackalloc byte[4];
+            ToNetworkIP(ip, NetworkHelper.ToPrefixValue(prefixLength)).TryWriteBytes(bytes, out _);
+
+            uint network = BinaryPrimitives.ReadUInt32BigEndian(bytes);
+            IPAddress gateway = new IPAddress(BinaryPrimitives.ReverseEndianness(network + 1));
+            return gateway;
+        }
+        public static IPAddress ToGatewayIP(uint ip, uint prefixIP)
+        {
+            Span<byte> bytes = stackalloc byte[4];
+            ToNetworkIP(ip, prefixIP).TryWriteBytes(bytes, out _);
+            uint network = BinaryPrimitives.ReadUInt32BigEndian(bytes);
+            IPAddress gateway = new IPAddress(BinaryPrimitives.ReverseEndianness(network + 1));
+            return gateway;
+        }
+
+
+#if DISABLE_IPV6 || (!UNITY_EDITOR && ENABLE_IL2CPP && !UNITY_2018_3_OR_NEWER)
+            public static bool  IPv6Support = false;
+#elif !UNITY_2019_1_OR_NEWER && !UNITY_2018_4_OR_NEWER && (!UNITY_EDITOR && ENABLE_IL2CPP && UNITY_2018_3_OR_NEWER)
+           public static bool   IPv6Support = Socket.OSSupportsIPv6 && int.Parse(UnityEngine.Application.unityVersion.Remove(UnityEngine.Application.unityVersion.IndexOf('f')).Split('.')[2]) >= 6;
+#elif UNITY_2018_2_OR_NEWER
+           public static bool   IPv6Support = Socket.OSSupportsIPv6;
+#elif UNITY
+#pragma warning disable 618
+           public static bool   IPv6Support = Socket.SupportsIPv6;
+#pragma warning restore 618
+#else
+
+        public static bool IPv6Support => Socket.OSSupportsIPv6;
+
+        [GeneratedRegex(@"(\d+\.\d+\.\d+\.\d+)")]
+        private static partial Regex MyRegex();
+#endif
+    }
+}

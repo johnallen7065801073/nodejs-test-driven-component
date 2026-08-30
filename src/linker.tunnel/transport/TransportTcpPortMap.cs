@@ -1,0 +1,405 @@
+﻿using linker.tunnel.connection;
+using linker.tunnel.wanport;
+using System.Net.Sockets;
+using System.Net;
+using System.Text;
+using linker.libs.extends;
+using System.Collections.Concurrent;
+using linker.libs;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+using System.Security.Authentication;
+using linker.libs.timer;
+using System.Buffers;
+
+namespace linker.tunnel.transport
+{
+    /// <summary>
+    /// 基于端口映射
+    /// 这个没什么说的，就是设置了固定端口，就监听，对方来连这个固定的端口即可
+    /// </summary>
+    public sealed class TransportTcpPortMap : ITunnelTransport
+    {
+        public string Name => "TcpPortMap";
+
+        public string Label => "TCP、端口映射";
+
+        public TunnelProtocolType ProtocolType => TunnelProtocolType.Tcp;
+
+        public TunnelWanPortProtocolType AllowWanPortProtocolType => TunnelWanPortProtocolType.Tcp | TunnelWanPortProtocolType.Udp;
+        public TunnelType TunnelType => TunnelType.P2P;
+
+        public bool Reverse => true;
+
+        public bool DisableReverse => false;
+
+        public bool SSL => true;
+
+        public bool DisableSSL => false;
+
+        public byte Order => 2;
+
+        public bool EnableAddr => true;
+
+        public Action<ITunnelConnection, TunnelTransportInfo> OnConnected { get; set; } = (state, info) => { };
+
+        private readonly string authStr = "GET /snltty/tcp/index.html HTTP/1.1\r\nHost: www.snltty.com\r\nConnection: keep-alive\r\nTransfer-Encoding: chunked\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nCookie: {0}\r\n\r\n";
+        private readonly string endStr = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\nContent-Type: text/html\r\nCookie: {0}\r\n\r\nOK";
+        private readonly byte[] cookieBytes = Encoding.UTF8.GetBytes("Cookie: ");
+
+
+        private readonly ConcurrentDictionary<string, TaskCompletionSource<Socket>> distDic = new ConcurrentDictionary<string, TaskCompletionSource<Socket>>();
+
+        private readonly ITunnelMessengerAdapter tunnelMessengerAdapter;
+        public TransportTcpPortMap(ITunnelMessengerAdapter tunnelMessengerAdapter)
+        {
+            this.tunnelMessengerAdapter = tunnelMessengerAdapter;
+        }
+        private X509Certificate certificate;
+        public void SetSSL(X509Certificate certificate)
+        {
+            this.certificate = certificate;
+        }
+
+
+        Socket socket;
+        public async Task Listen(int localPort)
+        {
+            try
+            {
+                if (localPort == 0) return;
+
+                if (socket != null && (socket.LocalEndPoint as IPEndPoint).Port == localPort)
+                {
+                    if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+                    {
+                        LoggerHelper.Instance.Warning($"{Name} {socket.LocalEndPoint} already exists");
+                    }
+                    return;
+                }
+
+                socket?.SafeClose();
+
+                IPAddress localIP = IPAddress.IPv6Any;
+
+                Socket _socket = new Socket(localIP.AddressFamily, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
+                _socket.IPv6Only(localIP.AddressFamily, false);
+                _socket.Bind(new IPEndPoint(localIP, localPort));
+                _socket.Listen(int.MaxValue);
+                socket = _socket;
+
+                if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+                {
+                    LoggerHelper.Instance.Debug($"{Name} listen {localPort}");
+                }
+
+                while (true)
+                {
+                    try
+                    {
+                        Socket client = await socket.AcceptAsync().ConfigureAwait(false);
+
+                        TimerHelper.Async(async () =>
+                        {
+                            using CancellationTokenSource cts = new CancellationTokenSource(3000);
+                            try
+                            {
+                                using IMemoryOwner<byte> buffer = MemoryPool<byte>.Shared.Rent(1024);
+                                int length = await client.ReceiveAsync(buffer.Memory, cts.Token).ConfigureAwait(false);
+                                if (length > 0)
+                                {
+                                    string key = GetKey(buffer.Memory.Slice(0, length));
+                                    if (distDic.TryRemove(key, out TaskCompletionSource<Socket> tcs))
+                                    {
+                                        await client.SendAsync(Encoding.UTF8.GetBytes(string.Format(endStr, key))).ConfigureAwait(false);
+                                        tcs.TrySetResult(client);
+                                        return;
+                                    }
+                                }
+                                client.SafeClose();
+                            }
+                            catch (Exception)
+                            {
+                                client.SafeClose();
+                            }
+                        });
+                    }
+                    catch (Exception)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+                {
+                    LoggerHelper.Instance.Error(ex);
+                }
+            }
+        }
+
+        public async Task<ITunnelConnection> ConnectAsync(TunnelTransportInfo tunnelTransportInfo)
+        {
+            if (tunnelTransportInfo.Direction == TunnelDirection.Forward)
+            {
+                if (tunnelTransportInfo.Remote.PortMapWan == 0)
+                {
+                    if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+                        LoggerHelper.Instance.Error($"ConnectAsync Forward【{Name}】{tunnelTransportInfo.Remote.MachineName} port mapping not configured");
+                    return null;
+                }
+                //正向连接
+                if (await tunnelMessengerAdapter.SendConnectBegin(tunnelTransportInfo).ConfigureAwait(false) == false)
+                {
+                    return null;
+                }
+                await Task.Delay(100).ConfigureAwait(false);
+                ITunnelConnection connection = await ConnectForward(tunnelTransportInfo).ConfigureAwait(false);
+                if (connection != null)
+                {
+                    await tunnelMessengerAdapter.SendConnectSuccess(tunnelTransportInfo).ConfigureAwait(false);
+                    return connection;
+                }
+            }
+            else if (tunnelTransportInfo.Direction == TunnelDirection.Reverse)
+            {
+                if (tunnelTransportInfo.Local.PortMapWan == 0)
+                {
+                    if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+                        LoggerHelper.Instance.Error($"ConnectAsync Reverse【{Name}】{tunnelTransportInfo.Local.MachineName} port mapping not configured");
+                    return null;
+                }
+                //反向连接
+                TunnelTransportInfo tunnelTransportInfo1 = tunnelTransportInfo.ToJsonFormat().DeJson<TunnelTransportInfo>();
+                //等待对方连接，如果连接成功，我会收到一个socket，并且创建一个连接对象，失败的话会超时，那就是null
+                var task = WaitConnect(tunnelTransportInfo1);
+                if (await tunnelMessengerAdapter.SendConnectBegin(tunnelTransportInfo1).ConfigureAwait(false) == false)
+                {
+                    return null;
+                }
+                ITunnelConnection connection = await task.ConfigureAwait(false);
+                if (connection != null)
+                {
+                    await tunnelMessengerAdapter.SendConnectSuccess(tunnelTransportInfo).ConfigureAwait(false);
+                    return connection;
+                }
+            }
+
+
+            await tunnelMessengerAdapter.SendConnectFail(tunnelTransportInfo).ConfigureAwait(false);
+            return null;
+        }
+        public async Task OnBegin(TunnelTransportInfo tunnelTransportInfo)
+        {
+            if (tunnelTransportInfo.SSL && certificate == null)
+            {
+                LoggerHelper.Instance.Error($"{Name}->ssl Certificate not found");
+                await tunnelMessengerAdapter.SendConnectFail(tunnelTransportInfo).ConfigureAwait(false);
+                return;
+            }
+            //正向连接，等他来连
+            if (tunnelTransportInfo.Direction == TunnelDirection.Forward)
+            {
+                if (tunnelTransportInfo.Local.PortMapWan == 0)
+                {
+                    if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+                        LoggerHelper.Instance.Error($"OnBegin WaitConnect 【{Name}】{tunnelTransportInfo.Local.MachineName} port mapping not configured");
+                    await tunnelMessengerAdapter.SendConnectFail(tunnelTransportInfo).ConfigureAwait(false);
+                    return;
+                }
+                _ = WaitConnect(tunnelTransportInfo).ContinueWith((result) =>
+                {
+                    OnConnected(result.Result, tunnelTransportInfo);
+                });
+            }
+            //我要连它，那就连接
+            else
+            {
+                if (tunnelTransportInfo.Remote.PortMapWan == 0)
+                {
+                    if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+                        LoggerHelper.Instance.Error($"OnBegin ConnectForward 【{Name}】{tunnelTransportInfo.Remote.MachineName} port mapping not configured");
+                    await tunnelMessengerAdapter.SendConnectFail(tunnelTransportInfo).ConfigureAwait(false);
+                    return;
+                }
+
+                ITunnelConnection connection = await ConnectForward(tunnelTransportInfo).ConfigureAwait(false);
+                if (connection != null)
+                {
+                    OnConnected(connection, tunnelTransportInfo);
+                    await tunnelMessengerAdapter.SendConnectSuccess(tunnelTransportInfo).ConfigureAwait(false);
+                }
+                else
+                {
+                    await tunnelMessengerAdapter.SendConnectFail(tunnelTransportInfo).ConfigureAwait(false);
+                }
+            }
+        }
+
+        public void OnFail(TunnelTransportInfo tunnelTransportInfo)
+        {
+        }
+        public void OnSuccess(TunnelTransportInfo tunnelTransportInfo)
+        {
+        }
+
+        private async Task<ITunnelConnection> WaitConnect(TunnelTransportInfo tunnelTransportInfo)
+        {
+            TaskCompletionSource<Socket> tcs = new TaskCompletionSource<Socket>(TaskCreationOptions.RunContinuationsAsynchronously);
+            string key = $"{tunnelTransportInfo.Remote.MachineId}-{tunnelTransportInfo.FlowId}";
+            distDic.TryAdd(key, tcs);
+            Socket socket = null;
+            SslStream sslStream = null;
+            try
+            {
+                socket = await tcs.WithTimeout(TimeSpan.FromMilliseconds(5000)).ConfigureAwait(false);
+                socket.KeepAlive();
+
+                if (tunnelTransportInfo.SSL)
+                {
+                    if (certificate == null)
+                    {
+                        LoggerHelper.Instance.Error($"{Name}-> ssl Certificate not found");
+                        socket.SafeClose();
+                        return null;
+                    }
+
+                    sslStream = new SslStream(new NetworkStream(socket, false), false, ValidateServerCertificate, null);
+                    using CancellationTokenSource _cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(5000));
+                    await sslStream.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+                    {
+                        ServerCertificate = certificate,
+                        EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12,
+                        CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+                        ClientCertificateRequired = OperatingSystem.IsAndroid(),
+                    }, _cts.Token).ConfigureAwait(false);
+                }
+
+                TunnelConnectionTcp result = new TunnelConnectionTcp
+                {
+                    RemoteMachineId = tunnelTransportInfo.Remote.MachineId,
+                    RemoteMachineName = tunnelTransportInfo.Remote.MachineName,
+                    Direction = tunnelTransportInfo.Direction,
+                    ProtocolType = TunnelProtocolType.Tcp,
+                    Stream = sslStream,
+                    Socket = socket,
+                    Type = TunnelType,
+                    Mode = TunnelMode.Server,
+                    TransactionId = tunnelTransportInfo.TransactionId,
+                    Configure = tunnelTransportInfo.Configure,
+                    TransportName = tunnelTransportInfo.TransportName,
+                    IPEndPoint = (socket.RemoteEndPoint as IPEndPoint).MapToIPv4(),
+                    Label = string.Empty,
+                    SSL = tunnelTransportInfo.SSL,
+                    BufferSize = tunnelTransportInfo.BufferSize,
+                };
+                return result;
+            }
+            catch (Exception)
+            {
+                tcs.TrySetResult(null);
+                socket?.SafeClose();
+                sslStream?.Dispose();
+            }
+            finally
+            {
+                distDic.TryRemove(key, out _);
+            }
+            return null;
+        }
+        private async Task<ITunnelConnection> ConnectForward(TunnelTransportInfo tunnelTransportInfo)
+        {
+            if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+            {
+                LoggerHelper.Instance.Warning($"{Name} connect to {tunnelTransportInfo.Remote.MachineId}->{tunnelTransportInfo.Remote.MachineName} {tunnelTransportInfo.RemoteEndPoints.FirstOrDefault()}");
+            }
+
+            List<IPEndPoint> eps = tunnelTransportInfo.RemoteEndPoints.Select(c => c.Address).Distinct().Select(c => new IPEndPoint(c, tunnelTransportInfo.Remote.PortMapWan)).ToList();
+
+            using IMemoryOwner<byte> buffer = MemoryPool<byte>.Shared.Rent(1024);
+
+            foreach (var ep in eps)
+            {
+                Socket targetSocket = new(ep.AddressFamily, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
+                using CancellationTokenSource cts = new CancellationTokenSource(500);
+                try
+                {
+                    targetSocket.KeepAlive();
+                    targetSocket.IPv6Only(ep.AddressFamily, false);
+                    targetSocket.ReuseBind(new IPEndPoint(ep.AddressFamily == AddressFamily.InterNetwork ? IPAddress.Any : IPAddress.IPv6Any, tunnelTransportInfo.Local.Local.Port));
+
+                    await targetSocket.ConnectAsync(ep, cts.Token).ConfigureAwait(false);
+
+                    string key = $"{tunnelTransportInfo.Local.MachineId}-{tunnelTransportInfo.FlowId}";
+                    byte[] sendt = Encoding.UTF8.GetBytes(string.Format(authStr, key));
+                    await targetSocket.SendAsync(sendt).ConfigureAwait(false);
+                    await targetSocket.ReceiveAsync(buffer.Memory, cts.Token).ConfigureAwait(false);
+
+                    //需要ssl
+                    SslStream sslStream = null;
+                    if (tunnelTransportInfo.SSL)
+                    {
+                        sslStream = new SslStream(new NetworkStream(targetSocket, false), false, ValidateServerCertificate, null);
+                        await sslStream.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                        {
+                            EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12,
+                            CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+                            ClientCertificates = new X509CertificateCollection { certificate },
+                        }, cts.Token).ConfigureAwait(false);
+                    }
+
+                    return new TunnelConnectionTcp
+                    {
+                        Stream = sslStream,
+                        Socket = targetSocket,
+                        IPEndPoint = (targetSocket.RemoteEndPoint as IPEndPoint).MapToIPv4(),
+                        TransactionId = tunnelTransportInfo.TransactionId,
+                        Configure = tunnelTransportInfo.Configure,
+                        RemoteMachineId = tunnelTransportInfo.Remote.MachineId,
+                        RemoteMachineName = tunnelTransportInfo.Remote.MachineName,
+                        TransportName = Name,
+                        Direction = tunnelTransportInfo.Direction,
+                        ProtocolType = ProtocolType,
+                        Type = TunnelType,
+                        Mode = TunnelMode.Client,
+                        Label = string.Empty,
+                        SSL = tunnelTransportInfo.SSL,
+                        BufferSize = tunnelTransportInfo.BufferSize,
+                    };
+                }
+                catch (Exception ex)
+                {
+                    if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+                    {
+                        LoggerHelper.Instance.Error($"{Name} connect {ep} fail {ex}");
+                    }
+                    targetSocket.SafeClose();
+                }
+            }
+            return null;
+        }
+        private bool ValidateServerCertificate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors)
+        {
+            if (LoggerHelper.Instance.LoggerLevel <= LoggerTypes.DEBUG)
+            {
+                LoggerHelper.Instance.Info($"【P2P {Name}】Certificate validation: {certificate?.Subject}");
+                LoggerHelper.Instance.Info($"【P2P {Name}】SSL Policy Errors: {sslPolicyErrors}");
+            }
+            return true;
+        }
+
+        private string GetKey(Memory<byte> memory)
+        {
+            var span = memory.Span;
+            int start = span.IndexOf(cookieBytes);
+            if (start == -1)
+            {
+                return string.Empty;
+            }
+
+            int end = span.Slice(start).IndexOf(Encoding.UTF8.GetBytes("\r\n"));
+            return Encoding.UTF8.GetString(span.Slice(start + cookieBytes.Length, end - cookieBytes.Length));
+        }
+    }
+}
